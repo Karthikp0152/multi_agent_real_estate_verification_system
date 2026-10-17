@@ -14,27 +14,59 @@ refused by the domain -- same as kuda.in. That doesn't change the design:
 every source starts in manual mode regardless (see adapters/base.py), so
 this stays manual whether or not a captcha turns out to be present.
 
-STILL PROVISIONAL: `LandRecordExtract` (schemas/land_records.py) is a
-best-effort guess at what's legible in a lookup result -- nobody has
-supplied a real sample yet. `parse()` refuses to run until one exists.
+STILL UNVALIDATED AGAINST A REAL SAMPLE: parse() is implemented -- a
+vision model reads the upload into the schema below, and anything it
+cannot read stays null, which becomes a "not_verified" finding rather
+than a guess. What is NOT yet confirmed is whether these field names
+match what the real page actually shows. Until someone runs this against
+a genuine screenshot, treat the field set as a best-effort guess that
+may need correcting, not as verified.
 """
 
 from pathlib import Path
 
 from bhoomicheck.adapters.base import ManualAdapter
+from bhoomicheck.llm.extraction import extract_structured
+from bhoomicheck.llm.provider import LLMProvider
 from bhoomicheck.schemas.land_records import LandRecordExtract
 from bhoomicheck.schemas.parcel import ParcelIdentifier
+
+_PARSE_CONTEXT = """\
+This is a screenshot of a "Know Land Status" result from Bhu Bharati,
+Telangana's land-records portal (the system that replaced Dharani).
+
+Read off, where legible:
+- the pattadar (owner) name or names, exactly as printed; there may be
+  several for one survey number
+- the pattadar passbook number
+- the extent/area, copied verbatim with its units (acres-guntas, sq yds)
+- the land type/classification as the portal words it (e.g. patta land,
+  assigned land, government land)
+- whether the record flags this parcel as prohibited or assigned land
+  (the Section 22-A prohibited-lands register). Set prohibited_status
+  true only if the screen says it IS prohibited/assigned, false only if
+  it explicitly says it is not, and null if the screen does not address
+  it at all. Absence of a flag on screen is not proof of absence."""
 
 
 class LandRecordsAdapter(ManualAdapter[ParcelIdentifier, LandRecordExtract]):
     """Manual-mode adapter: Bhu Bharati "Know Land Status" lookup.
 
     `instructions()` points at the real, confirmed portal URL. `parse()`
-    still needs a real result screenshot before it can be implemented --
-    it fails loudly instead of guessing at layout nobody has seen.
+    reads the screenshot with a vision model; its field names have not
+    yet been validated against a real sample.
     """
 
     source_name = "Bhu Bharati (Telangana Integrated Land Records Management System)"
+
+    def __init__(self, provider: LLMProvider | None = None) -> None:
+        """
+        Args:
+            provider: Model backend used to read the screenshot. Optional
+                so instructions() works without one; parse() raises if it
+                was never supplied.
+        """
+        self.provider = provider
 
     def instructions(self, parcel: ParcelIdentifier) -> str:
         return (
@@ -51,9 +83,13 @@ class LandRecordsAdapter(ManualAdapter[ParcelIdentifier, LandRecordExtract]):
         )
 
     def parse(self, upload_path: Path) -> LandRecordExtract:
-        raise NotImplementedError(
-            "LandRecordsAdapter.parse() has no real Bhu Bharati result "
-            "sample to learn its shape from yet -- provide a screenshot "
-            "before this can be implemented (fail loudly rather than "
-            "guess at parsing logic, per CLAUDE.md principle 6)."
+        if self.provider is None:
+            raise RuntimeError(
+                "LandRecordsAdapter.parse() needs an LLMProvider; "
+                "construct it as LandRecordsAdapter(provider)."
+            )
+        extract = extract_structured(
+            self.provider, upload_path, LandRecordExtract, _PARSE_CONTEXT
         )
+        assert isinstance(extract, LandRecordExtract)
+        return extract

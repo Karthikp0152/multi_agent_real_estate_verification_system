@@ -13,6 +13,7 @@ dependencies = [
     "python-dotenv",
     "pyyaml",
     "langgraph",
+    "langgraph-checkpoint-sqlite",
 ]
 
 [project.optional-dependencies]
