@@ -71,12 +71,100 @@ class OwnerBackgroundAgent:
         findings = [
             self._poa_sale_finding(extract, provenance),
             self._seller_identity_finding(extract, provenance),
+            self._encumbrance_finding(extract, provenance),
+            self._equitable_mortgage_finding(provenance),
         ]
         # Only meaningful when a POA is actually involved -- see docstring
         # on _poa_registered_finding.
         if extract.is_poa_sale:
             findings.append(self._poa_registered_finding(extract, provenance))
         return findings
+
+    def _encumbrance_finding(
+        self, extract: OwnerBackgroundExtract, provenance: Provenance
+    ) -> Finding:
+        if extract.encumbrances_found is None:
+            return Finding(
+                check_id="owner_background.encumbrances",
+                claim="whether any registered mortgage or charge is recorded against this property",
+                status="not_verified",
+                provenance=provenance,
+                confidence=Confidence(level="low", reason=NOT_LEGIBLE_REASON),
+            )
+        if extract.encumbrances_found:
+            undischarged = [e for e in extract.encumbrances if not e.discharged]
+            summary = "; ".join(
+                f"{e.nature or 'charge'} {e.document_no or '(unnumbered)'}"
+                + (f" dated {e.registered_on.isoformat()}" if e.registered_on else "")
+                for e in extract.encumbrances
+            )
+            return Finding(
+                check_id="owner_background.encumbrances",
+                claim=(
+                    f"{len(extract.encumbrances)} registered encumbrance(s) recorded "
+                    f"against this property: {summary}"
+                    if summary
+                    else "registered encumbrance(s) are recorded against this property"
+                ),
+                status="issue_found",
+                provenance=provenance,
+                confidence=Confidence(
+                    level="medium",
+                    reason=(
+                        f"{len(undischarged)} of {len(extract.encumbrances)} show no "
+                        "discharge on this screen -- a charge the listing does not mark "
+                        "discharged is not proof it is still live, nor proof it is not; "
+                        "confirm with the sub-registrar"
+                        if extract.encumbrances
+                        else "as displayed by the portal"
+                    ),
+                ),
+            )
+        return Finding(
+            check_id="owner_background.encumbrances",
+            claim="no registered mortgage or charge was listed against this property",
+            status="verified_ok",
+            provenance=provenance,
+            confidence=Confidence(
+                level="medium",
+                reason=(
+                    "covers registered documents only -- see the separate finding on "
+                    "equitable mortgages, which never appear in this search"
+                ),
+            ),
+        )
+
+    def _equitable_mortgage_finding(self, provenance: Provenance) -> Finding:
+        """A standing finding: a risk this source structurally cannot see.
+
+        Always not_verified, regardless of input, and that is the point.
+        An equitable mortgage -- title deeds deposited with a lender, no
+        registered deed -- is legally valid and leaves no trace in any
+        registered-document search. A clean encumbrance certificate
+        therefore does not mean "no mortgage", and a report that goes
+        quiet on the distinction invites exactly the wrong conclusion.
+        Principle 6 says an un-performable check is reported, not
+        omitted; this is that rule applied to a permanent blind spot
+        rather than a temporary outage.
+        """
+        return Finding(
+            check_id="owner_background.equitable_mortgage",
+            claim=(
+                "whether an equitable mortgage (title deeds deposited with a lender, "
+                "with no registered deed) exists against this property"
+            ),
+            status="not_verified",
+            provenance=provenance,
+            confidence=Confidence(
+                level="low",
+                reason=(
+                    "not knowable from registered records by design -- an equitable "
+                    "mortgage creates no registered document, so no encumbrance "
+                    "search can rule it out; ask the seller for an original title "
+                    "deed and have an advocate verify it is not deposited with a lender"
+                ),
+            ),
+        )
 
     def _poa_sale_finding(
         self, extract: OwnerBackgroundExtract, provenance: Provenance

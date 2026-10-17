@@ -53,6 +53,15 @@ Read off, where legible:
 - seller_name_matches_title: whether the seller's name matches the name
   on the registered chain shown here
 
+- encumbrances_found / encumbrances: if this is an Encumbrance Search
+  result, list every registered mortgage or charge shown, copying the
+  document number, registration date, the nature of the entry in the
+  portal's own words, the party names, and any amount as printed. Set
+  discharged true only if the listing explicitly shows the charge as
+  discharged or released; null if it simply does not say. Set
+  encumbrances_found false only if the search clearly ran and returned
+  no entries -- null if the screenshot does not establish that.
+
 Leave anything the screenshot does not clearly establish as null. Do not
 reason about what is likely -- only report what is on screen."""
 
