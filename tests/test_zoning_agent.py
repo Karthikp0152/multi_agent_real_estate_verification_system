@@ -74,3 +74,15 @@ def test_provenance_document_matches_uploaded_filename() -> None:
     for finding in report.findings:
         assert finding.provenance is not None
         assert finding.provenance.document == "my_screenshot.png"
+
+
+def test_plan_approval_date_flows_into_provenance() -> None:
+    from datetime import date
+
+    extract = KudaMasterPlanExtract(
+        zoning_classification="residential", plan_approved_on=date(2024, 11, 17)
+    )
+    report = ZoningAgent().report(PARCEL, [(Path("kuda.png"), extract)])
+    for finding in report.findings:
+        assert finding.provenance is not None
+        assert finding.provenance.record_updated_at == date(2024, 11, 17)

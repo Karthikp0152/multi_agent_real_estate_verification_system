@@ -128,6 +128,13 @@ def _finding_html(finding: Finding) -> str:
             + (f" ({escape(str(where))})" if where else "")
             + f" &mdash; retrieved {escape(finding.provenance.fetched_at.isoformat())}</div>"
         )
+        if finding.provenance.record_updated_at is not None:
+            # Shown separately from "retrieved", because they answer
+            # different questions and conflating them hides staleness.
+            parts.append(
+                '<div class="meta"><b>Source record last updated:</b> '
+                f"{escape(finding.provenance.record_updated_at.isoformat())}</div>"
+            )
 
     parts.append(f'<div class="meta"><b>Check:</b> {escape(finding.check_id)}</div>')
     parts.append("</div>")

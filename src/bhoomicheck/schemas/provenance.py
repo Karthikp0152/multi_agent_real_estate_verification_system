@@ -24,6 +24,14 @@ class Provenance(BaseModel):
             uploaded PDF's filename), when there is no URL.
         fetched_at: The date the fact was retrieved. Government records go
             stale; a report must show how fresh each fact is.
+        record_updated_at: When the *source* says its own record was last
+            updated, which is a different and often far more important
+            date than fetched_at. Looking a parcel up today tells you
+            nothing if the registry behind it was last touched years ago.
+            Bhu Bharati prints this on its search page ("Records are
+            updated as on - ..."), so it is real data we would otherwise
+            discard. Optional because not every source states it, and a
+            guess here would be worse than an honest absence.
     """
 
     source_name: str
@@ -31,6 +39,7 @@ class Provenance(BaseModel):
     url: str | None = None
     document: str | None = None
     fetched_at: date
+    record_updated_at: date | None = None
 
     @model_validator(mode="after")
     def require_url_or_document(self) -> Self:

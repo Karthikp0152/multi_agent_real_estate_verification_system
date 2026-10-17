@@ -59,6 +59,10 @@ class LandRecordsAgent:
             source_type="manual",
             document=upload_path.name,
             fetched_at=fetched_at,
+            # The portal states its own data vintage; carrying it through
+            # means a reader can tell a fresh record from a stale one,
+            # rather than only seeing when we happened to look.
+            record_updated_at=extract.records_updated_as_on,
         )
         return [
             self._ownership_finding(extract, provenance),

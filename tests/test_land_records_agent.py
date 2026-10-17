@@ -72,3 +72,15 @@ def test_provenance_document_matches_uploaded_filename() -> None:
     for finding in report.findings:
         assert finding.provenance is not None
         assert finding.provenance.document == "my_screenshot.png"
+
+
+def test_record_vintage_flows_into_provenance() -> None:
+    from datetime import date
+
+    extract = LandRecordExtract(
+        owner_names=["K. Rajaiah"], records_updated_as_on=date(2026, 10, 17)
+    )
+    report = LandRecordsAgent().report(PARCEL, [(Path("bhubharati.png"), extract)])
+    for finding in report.findings:
+        assert finding.provenance is not None
+        assert finding.provenance.record_updated_at == date(2026, 10, 17)

@@ -5,6 +5,7 @@ dependency-free foundation, so the raw extract type lives here, and
 adapters/land_records.py imports it rather than defining it locally.
 """
 
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -34,6 +35,11 @@ class LandRecordExtract(BaseModel):
             prohibited-lands (Section 22-A) register -- this is the
             central "assigned/prohibited land" risk from CLAUDE.md's
             problem statement.
+        records_updated_as_on: The vintage the portal states for its own
+            data ("Records are updated as on - ..."). Carried into the
+            finding's Provenance, because when the registry was last
+            updated matters as much as when we looked: a lookup today
+            against a record untouched for years is weak evidence.
         notes: Anything else shown that doesn't fit a structured field.
     """
 
@@ -42,6 +48,7 @@ class LandRecordExtract(BaseModel):
     extent: str | None = None
     land_type: str | None = None
     prohibited_status: bool | None = None
+    records_updated_as_on: date | None = None
     notes: str | None = None
 
 

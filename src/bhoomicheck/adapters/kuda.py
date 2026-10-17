@@ -49,6 +49,9 @@ Read off, where legible:
 - whether a major road upgrade is NEAR the parcel without crossing it
 - whether an area marked "Approved Layout" is nearby
 
+- plan_approved_on: the map's own approval date, printed near the title
+  block as "Approved vide G.O. Ms. No. ... dated DD-MM-YYYY"
+
 If you cannot tell whether a road crosses the parcel versus merely passes
 nearby, leave both fields null rather than choosing one."""
 

@@ -119,3 +119,26 @@ def test_untrusted_text_is_escaped() -> None:
     assert "<script>" not in html
     assert "&lt;script&gt;" in html
     assert "&amp; co" in html
+
+
+def test_record_vintage_is_shown_separately_from_fetch_date() -> None:
+    # "We looked today" and "the registry was last updated in 2019" are
+    # different claims; collapsing them would hide staleness.
+    finding = make_finding(
+        provenance=Provenance(
+            source_name="Bhu Bharati",
+            source_type="manual",
+            document="bhubharati.png",
+            fetched_at=date(2026, 10, 17),
+            record_updated_at=date(2019, 4, 2),
+        )
+    )
+    html = render_html(make_report([finding]))
+    assert "2026-10-17" in html
+    assert "2019-04-02" in html
+    assert "last updated" in html
+
+
+def test_record_vintage_is_omitted_when_the_source_does_not_state_it() -> None:
+    html = render_html(make_report())  # provenance has no record_updated_at
+    assert "last updated" not in html

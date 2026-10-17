@@ -9,10 +9,15 @@ messy records. Searched by District -> Mandal -> Village -> Survey
 Number, which maps directly onto ParcelIdentifier (unlike litigation,
 which needed ManualAdapter to become generic over the query type at all).
 
-A direct fetch to verify page details (captcha/OTP specifics) was
-refused by the domain -- same as kuda.in. That doesn't change the design:
-every source starts in manual mode regardless (see adapters/base.py), so
-this stays manual whether or not a captcha turns out to be present.
+The search form is captcha-gated -- confirmed by eye against the live
+page, after a direct fetch to check was refused by the domain. That puts
+this squarely under CLAUDE.md's hard guardrail: we never automate around
+a captcha, so this source is manual-only, permanently, not just until
+someone gets around to writing a scraper.
+
+The form itself: a "Search By" choice of Survey No./Sub-Division No. or
+Pattadar Passbook Number, then District -> Mandal -> Village dropdowns,
+then the captcha, then Fetch.
 
 STILL UNVALIDATED AGAINST A REAL SAMPLE: parse() is implemented -- a
 vision model reads the upload into the schema below, and anything it
@@ -46,7 +51,11 @@ Read off, where legible:
   (the Section 22-A prohibited-lands register). Set prohibited_status
   true only if the screen says it IS prohibited/assigned, false only if
   it explicitly says it is not, and null if the screen does not address
-  it at all. Absence of a flag on screen is not proof of absence."""
+  it at all. Absence of a flag on screen is not proof of absence.
+- records_updated_as_on: the portal prints its own data vintage, worded
+  like "Records are updated as on - 17-10-2026". Copy that date if it is
+  visible. This is the date the REGISTRY was last updated, which is not
+  the date you took the screenshot."""
 
 
 class LandRecordsAdapter(ManualAdapter[ParcelIdentifier, LandRecordExtract]):
