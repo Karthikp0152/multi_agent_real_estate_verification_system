@@ -26,6 +26,7 @@ where it cannot be missed, not only in a footer.
 from html import escape
 
 from bhoomicheck.schemas.finding import Finding
+from bhoomicheck.schemas.geo import RoadNetworkAssessment
 from bhoomicheck.schemas.report import BaseAgentReport
 from bhoomicheck.schemas.risk_report import RiskReport
 
@@ -102,7 +103,17 @@ _STYLES = """
   .meta b { color: #444; font-weight: 600; }
   footer { margin: 44px 0 0; padding-top: 14px; border-top: 1px solid var(--line);
            font-size: .8rem; color: var(--muted); }
-  @media print { body { background: #fff; padding: 0; } .finding { break-inside: avoid; } }
+  .geo { margin: 10px 0 26px; }
+  .geo caption { caption-side: top; text-align: left; font-size: .82rem;
+                 color: var(--muted); padding: 0 0 8px; }
+  table.roads { border-collapse: collapse; width: 100%; font-size: .85rem; }
+  table.roads th, table.roads td { text-align: right; padding: 6px 10px;
+                                   border-bottom: 1px solid var(--line); }
+  table.roads th:first-child, table.roads td:first-child { text-align: left; }
+  table.roads thead th { color: var(--muted); font-weight: 600; }
+  table.roads tr.hit td { background: #fff4f4; font-weight: 600; }
+  @media print { body { background: #fff; padding: 0; } .finding { break-inside: avoid; }
+                 table.roads tr.hit td { background: #fff4f4 !important; } }
 """
 
 
@@ -141,12 +152,70 @@ def _finding_html(finding: Finding) -> str:
     return "\n".join(parts)
 
 
+def _road_table_html(assessment: RoadNetworkAssessment) -> str:
+    """Every road class and its distance, not just the one that decided it.
+
+    A parcel clear by 3 m and one clear by 300 m produce the same
+    "verified_ok" finding, and a buyer should not have to take that on
+    trust. Showing the whole table also makes the result falsifiable:
+    anyone with the plan can check a row.
+    """
+    if not assessment.roads:
+        return ""
+
+    rows = []
+    for road in assessment.roads:
+        if road.encroaches:
+            outcome = f"encroaches {road.encroachment_m:,.1f} m"
+            cls = ' class="hit"'
+        else:
+            outcome = f"clear by {road.clearance_m:,.1f} m"
+            cls = ""
+        rows.append(
+            f"<tr{cls}>"
+            f"<td>{escape(road.road_label)}</td>"
+            f"<td>{road.proposed_width_m:.0f}</td>"
+            f"<td>{road.half_width_m:.1f}</td>"
+            f"<td>{road.distance_m:,.1f}</td>"
+            f"<td>{escape(outcome)}</td>"
+            "</tr>"
+        )
+
+    loc = assessment.location
+    coverage = (
+        ""
+        if assessment.within_mapped_area
+        else " <b>This parcel lies outside the area this network covers, so "
+        "these distances are not evidence about it.</b>"
+    )
+    caption = (
+        f"Measured from {loc.lat:.6f}, {loc.lon:.6f} "
+        f"({escape(loc.source.replace('_', ' '))}) against "
+        f"{escape(assessment.network_label)}. Distances are to each road's "
+        f"centreline; the corridor extends the half-width either side."
+        + coverage
+    )
+
+    return (
+        '<div class="geo"><table class="roads">'
+        f"<caption>{caption}</caption>"
+        "<thead><tr><th>Proposed road</th><th>Width (m)</th>"
+        "<th>Half-width (m)</th><th>Distance to centreline (m)</th>"
+        "<th>Result</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table></div>"
+    )
+
+
 def _section_html(report: BaseAgentReport) -> str:
     """One specialist agent's findings, worst status first."""
     heading = _AGENT_LABEL.get(report.agent_name, escape(report.agent_name))
     findings = sorted(report.findings, key=lambda f: _STATUS_ORDER.get(f.status, 99))
     cards = "\n".join(_finding_html(f) for f in findings)
-    return f"<h2>{heading}</h2>\n{cards}"
+    # Only the zoning report carries a road assessment, and only when a
+    # parcel coordinate was supplied; every other section is unaffected.
+    assessment = getattr(report, "road_assessment", None)
+    table = _road_table_html(assessment) if assessment is not None else ""
+    return f"<h2>{heading}</h2>\n{table}{cards}"
 
 
 def render_html(report: RiskReport) -> str:
