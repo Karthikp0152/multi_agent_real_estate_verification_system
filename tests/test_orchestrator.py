@@ -90,8 +90,10 @@ def make_orchestrator(
     road_widening: bool = False,
     prohibited: bool = False,
     poa_sale: bool = False,
+    road_network: object = None,
 ) -> Orchestrator:
     return Orchestrator(
+        road_network=road_network,
         document_agent=DocumentAnalysisAgent(FakeProvider([VALID_DOCUMENT_PAYLOAD])),
         kuda_adapter=FakeAdapter(
             KudaMasterPlanExtract(road_widening_affects_parcel=road_widening), "fetch kuda"
@@ -303,3 +305,139 @@ class TestPersistence:
         orchestrator = self._orchestrator(tmp_path / "checks.db")
         assert orchestrator.pending_uploads("never-started") == []
         assert orchestrator.final_report("never-started") is None
+
+
+# --- geometry flowing through the whole pipeline -------------------------
+#
+# The point of these is that the measured setback survives the graph: it
+# is computed inside zoning_node, embedded in a ZoningReport, carried
+# through a checkpoint, and still measured by the time it reaches the
+# final RiskReport.
+
+from bhoomicheck.geo.road_network import RoadNetwork  # noqa: E402
+from bhoomicheck.schemas.geo import LatLon  # noqa: E402
+
+NETWORK_FIXTURE = Path(__file__).parent / "fixtures" / "demo_road_network.json"
+# The synthetic fixture's parcel, where a 60 M corridor encroaches by 10 m.
+ENCROACHED = LatLon(lat=17.0, lon=79.0, source="surveyed")
+
+
+def _resolve_everything(orchestrator: Orchestrator, thread_id: str, pending: list) -> RiskReport:
+    uploads = {
+        "zoning": Path("kuda.png"),
+        "litigation": Path("ecourts.png"),
+        "land_records": Path("bhubharati.png"),
+        "owner_background": Path("igrs.png"),
+    }
+    result: list[PendingUpload] | RiskReport = pending
+    for item in list(pending):
+        result = orchestrator.provide_upload(thread_id, item.interrupt_id, uploads[item.agent])
+    assert isinstance(result, RiskReport)
+    return result
+
+
+def _setback_finding(report: RiskReport):
+    zoning = next(r for r in report.specialist_reports if r.agent_name == "zoning")
+    return next(f for f in zoning.findings if f.check_id == "zoning.road_widening_setback")
+
+
+def test_a_supplied_coordinate_makes_the_setback_check_measured() -> None:
+    orchestrator = make_orchestrator(road_network=RoadNetwork.from_json(NETWORK_FIXTURE))
+    pending = orchestrator.start(
+        thread_id="geo1",
+        parcel=PARCEL,
+        pdf_paths=[Path("sale_deed_2015_1234.pdf")],
+        litigation_query=LITIGATION_QUERY,
+        owner_background_query=OWNER_BACKGROUND_QUERY,
+        location=ENCROACHED,
+    )
+    report = _resolve_everything(orchestrator, "geo1", pending)
+
+    finding = _setback_finding(report)
+    assert finding.status == "issue_found"
+    assert finding.confidence.level == "high"
+    assert "60 M" in finding.claim
+
+
+def test_without_a_coordinate_the_check_stays_screenshot_derived() -> None:
+    """A network alone is not enough -- there must be a point to measure from."""
+    orchestrator = make_orchestrator(road_network=RoadNetwork.from_json(NETWORK_FIXTURE))
+    pending = orchestrator.start(
+        thread_id="geo2",
+        parcel=PARCEL,
+        pdf_paths=[Path("sale_deed_2015_1234.pdf")],
+        litigation_query=LITIGATION_QUERY,
+        owner_background_query=OWNER_BACKGROUND_QUERY,
+    )
+    report = _resolve_everything(orchestrator, "geo2", pending)
+
+    finding = _setback_finding(report)
+    assert finding.confidence.level == "medium"
+    assert "computed from plan geometry" not in finding.confidence.reason
+
+
+def test_without_a_network_the_check_stays_screenshot_derived() -> None:
+    """And a coordinate alone is not enough either -- a fresh clone has no plan data."""
+    orchestrator = make_orchestrator(road_network=None)
+    pending = orchestrator.start(
+        thread_id="geo3",
+        parcel=PARCEL,
+        pdf_paths=[Path("sale_deed_2015_1234.pdf")],
+        litigation_query=LITIGATION_QUERY,
+        owner_background_query=OWNER_BACKGROUND_QUERY,
+        location=ENCROACHED,
+    )
+    report = _resolve_everything(orchestrator, "geo3", pending)
+    assert _setback_finding(report).confidence.level == "medium"
+
+
+def test_a_measured_setback_survives_a_sqlite_checkpoint(tmp_path: Path) -> None:
+    """The bug this guards against is specific and was hit before.
+
+    LangGraph's checkpoint serializer takes an allowlist of Pydantic
+    types. An explicit allowlist acts as a blocklist: a type missing from
+    it round-trips to a plain dict *without raising*. The allowlist here
+    is derived by walking the schemas package, so geo types are included
+    automatically -- but only a real two-connection SQLite round-trip
+    proves it, because InMemorySaver never serializes at all.
+    """
+    db = tmp_path / "geo.db"
+
+    def build() -> Orchestrator:
+        return Orchestrator(
+            road_network=RoadNetwork.from_json(NETWORK_FIXTURE),
+            document_agent=DocumentAnalysisAgent(FakeProvider([VALID_DOCUMENT_PAYLOAD])),
+            kuda_adapter=FakeAdapter(KudaMasterPlanExtract(road_widening_affects_parcel=False)),
+            litigation_adapter=FakeAdapter(
+                LitigationSearchResult(searched_name="K. Rajaiah", cases=[])
+            ),
+            land_records_adapter=FakeAdapter(LandRecordExtract(prohibited_status=False)),
+            owner_background_adapter=FakeAdapter(OwnerBackgroundExtract(is_poa_sale=False)),
+            checkpointer=sqlite_checkpointer(db),
+        )
+
+    first = build()
+    pending = first.start(
+        thread_id="geo-sqlite",
+        parcel=PARCEL,
+        pdf_paths=[Path("sale_deed_2015_1234.pdf")],
+        litigation_query=LITIGATION_QUERY,
+        owner_background_query=OWNER_BACKGROUND_QUERY,
+        location=ENCROACHED,
+    )
+    # Resolve nothing here: the coordinate must survive in the checkpoint
+    # and still be a LatLon when a *different* orchestrator picks it up.
+    assert isinstance(pending, list)
+
+    second = build()
+    resumed = second.pending_uploads("geo-sqlite")
+    report = _resolve_everything(second, "geo-sqlite", resumed)
+
+    finding = _setback_finding(report)
+    assert finding.confidence.level == "high"
+    assert "60 M" in finding.claim
+
+    zoning = next(r for r in report.specialist_reports if r.agent_name == "zoning")
+    # Not a dict: the typed object came back as its own class.
+    assert isinstance(zoning.road_assessment.location, LatLon)
+    assert zoning.road_assessment.location.source == "surveyed"

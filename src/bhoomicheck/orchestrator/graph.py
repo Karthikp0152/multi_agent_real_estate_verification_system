@@ -58,6 +58,8 @@ from bhoomicheck.schemas.growth_potential import GrowthPotentialReport
 from bhoomicheck.schemas.land_records import LandRecordsReport
 from bhoomicheck.schemas.litigation import LitigationReport, LitigationSearchQuery
 from bhoomicheck.schemas.owner_background import OwnerBackgroundReport, OwnerBackgroundQuery
+from bhoomicheck.geo.road_network import RoadNetwork, load_default_network
+from bhoomicheck.schemas.geo import LatLon
 from bhoomicheck.schemas.parcel import ParcelIdentifier
 from bhoomicheck.schemas.risk_report import RiskReport
 from bhoomicheck.schemas.zoning import KudaMasterPlanExtract, ZoningReport
@@ -142,6 +144,12 @@ class OrchestratorState(TypedDict):
             query zoning/land_records search by directly.
         pdf_paths: Uploaded documents for DocumentAnalysisAgent, supplied
             up front (no interrupt -- see module docstring).
+        location: The parcel's coordinate, when one is known. Optional
+            because the revenue identity (survey number, village) is
+            what identifies a parcel and a coordinate is an extra the
+            caller may not have. Supplying it is what lets zoning_node
+            measure the master-plan setback instead of reading it off a
+            screenshot.
         litigation_query: Who to search eCourts for.
         owner_background_query: Who to search IGRS for.
         document_report / zoning_report / litigation_report /
@@ -158,6 +166,7 @@ class OrchestratorState(TypedDict):
 
     parcel: ParcelIdentifier
     pdf_paths: list[Path]
+    location: LatLon | None
     litigation_query: LitigationSearchQuery
     owner_background_query: OwnerBackgroundQuery
     document_report: DocumentAnalysisReport | None
@@ -204,6 +213,7 @@ class Orchestrator:
         growth_potential_agent: GrowthPotentialAgent | None = None,
         risk_report_agent: RiskReportAgent | None = None,
         checkpointer: BaseCheckpointSaver | None = None,
+        road_network: RoadNetwork | None = None,
     ) -> None:
         """
         Args:
@@ -219,6 +229,12 @@ class Orchestrator:
                 built against `provider`. Tests override them with fake
                 adapters that have a scripted parse(), same idea as
                 document_agent's FakeProvider.
+            road_network: Proposed road network used to measure
+                master-plan setbacks. Defaults to whatever
+                load_default_network() finds, which is None on a fresh
+                clone -- in that case the setback check falls back to
+                the screenshot reading, visibly, at lower confidence.
+                Tests pass the synthetic fixture explicitly.
             checkpointer: Defaults to InMemorySaver (see
                 _default_checkpointer), which is right for tests and
                 one-shot runs but dies with the process. Pass
@@ -236,6 +252,11 @@ class Orchestrator:
         self.owner_background_agent = owner_background_agent or OwnerBackgroundAgent()
         self.growth_potential_agent = growth_potential_agent or GrowthPotentialAgent()
         self.risk_report_agent = risk_report_agent or RiskReportAgent()
+        # `or` is wrong here: it would re-resolve the default every time a
+        # caller deliberately passed a network that happened to be falsy.
+        # More importantly, load_default_network() touches the filesystem,
+        # so it must not run when the caller already supplied one.
+        self.road_network = road_network if road_network is not None else load_default_network()
         self._graph = self._build_graph(checkpointer or _default_checkpointer())
 
     def _build_graph(self, checkpointer: BaseCheckpointSaver):
@@ -284,7 +305,19 @@ class Orchestrator:
         upload_path = Path(interrupt({"agent": "zoning", "instructions": instructions}))
         extract = self.kuda_adapter.parse(upload_path)
         extracts = [(upload_path, extract)]
-        report = self.zoning_agent.report(state["parcel"], extracts)
+        # Geometry is used only when both halves are present: a network
+        # to measure against, and a coordinate to measure from. Missing
+        # either is not an error -- the agent falls back to the
+        # screenshot-derived answer and says so in the finding.
+        location = state.get("location")
+        assessment = (
+            self.road_network.assess(location)
+            if self.road_network is not None and location is not None
+            else None
+        )
+        report = self.zoning_agent.report(
+            state["parcel"], extracts, road_assessment=assessment
+        )
         return {"zoning_report": report, "zoning_extracts": extracts}
 
     def _litigation_node(self, state: OrchestratorState) -> dict:
@@ -346,6 +379,7 @@ class Orchestrator:
         pdf_paths: list[Path],
         litigation_query: LitigationSearchQuery,
         owner_background_query: OwnerBackgroundQuery,
+        location: LatLon | None = None,
     ) -> list[PendingUpload] | RiskReport:
         """Begin a run. Returns pending uploads, or a RiskReport if nothing paused.
 
@@ -354,12 +388,17 @@ class Orchestrator:
                 to provide_upload() to resume it. Not generated internally
                 so the caller controls how runs map to real-world checks
                 (e.g. one thread_id per parcel being checked).
+            location: The parcel's coordinate, if known. Without it the
+                master-plan setback check falls back to reading a map
+                screenshot, so supplying it materially changes how
+                trustworthy the headline finding is.
         """
         config = {"configurable": {"thread_id": thread_id}}
         result = self._graph.invoke(
             {
                 "parcel": parcel,
                 "pdf_paths": pdf_paths,
+                "location": location,
                 "litigation_query": litigation_query,
                 "owner_background_query": owner_background_query,
                 "document_report": None,

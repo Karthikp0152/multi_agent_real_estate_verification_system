@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -262,3 +263,53 @@ class RoadNetwork:
         """Render a width the way the plan's own legend does, e.g. "45 M"."""
         whole = int(width_m)
         return f"{whole} M" if whole == width_m else f"{width_m:g} M"
+
+
+# --- locating the network file ------------------------------------------
+#
+# The geometry data is NOT shipped in this repository: it lives wherever
+# the operator put it, and the repo carries only the code plus a
+# synthetic fixture. That keeps real plan data out of git history (which
+# cannot be un-published once pushed) and makes the data location a
+# one-line default rather than an architectural commitment.
+
+_ENV_NETWORK_PATH = "BHOOMICHECK_ROAD_NETWORK"
+_ENV_DATA_ROOT = "BHOOMICHECK_DATA"
+_DEFAULT_FILENAME = "road_network.json"
+
+
+def default_network_path() -> Path:
+    """Where to look for the distilled road network.
+
+    `BHOOMICHECK_ROAD_NETWORK` names the file outright. Otherwise it is
+    `road_network.json` under the same data root the HTTP API already
+    uses (`BHOOMICHECK_DATA`, defaulting to ~/.bhoomicheck), so an
+    operator has one place to put runtime data rather than two.
+    """
+    explicit = os.environ.get(_ENV_NETWORK_PATH)
+    if explicit:
+        return Path(explicit)
+    root = Path(os.environ.get(_ENV_DATA_ROOT, Path.home() / ".bhoomicheck"))
+    return root / _DEFAULT_FILENAME
+
+
+def load_default_network() -> RoadNetwork | None:
+    """Load the configured network, or None if none is configured.
+
+    The two failure modes are deliberately treated differently:
+
+      * Absent file -> None. This is a normal, documented state (a fresh
+        clone has no plan data), and the caller degrades to the
+        screenshot-derived setback answer, which shows up in the report
+        as a lower-confidence finding. The gap is visible to the report's
+        reader rather than fatal to the run.
+      * Present but unreadable -> raises RoadNetworkError. A corrupt or
+        truncated file is a misconfiguration, and silently falling back
+        to eyeballing a map because the geometry failed to parse is
+        exactly the kind of quiet degradation this project exists to
+        avoid (architecture principle 6).
+    """
+    path = default_network_path()
+    if not path.exists():
+        return None
+    return RoadNetwork.from_json(path)
