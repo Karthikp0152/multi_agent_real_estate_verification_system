@@ -13,6 +13,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from bhoomicheck.schemas.geo import RoadNetworkAssessment
 from bhoomicheck.schemas.report import BaseAgentReport
 
 
@@ -84,7 +85,16 @@ class ZoningReport(BaseAgentReport):
             one is required: this agent only runs when a lookup was
             actually performed, so an empty list means a malfunction, not
             a clean result.
+        road_assessment: The computed measurement against the proposed
+            road network, when parcel coordinates were available. Carried
+            on the report (not just folded into a finding) so a reader
+            can see every road class and its distance, not only the one
+            that drove the verdict -- a parcel clear by 3 m and one clear
+            by 300 m produce the same finding but are not the same buy.
+            None when no coordinate was supplied, in which case the
+            setback finding fell back to the screenshot reading.
     """
 
     agent_name: Literal["zoning"] = "zoning"
     extracts: list[KudaMasterPlanExtract] = Field(min_length=1)
+    road_assessment: RoadNetworkAssessment | None = None

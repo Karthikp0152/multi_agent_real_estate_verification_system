@@ -18,6 +18,7 @@ from pathlib import Path
 
 from bhoomicheck.schemas.confidence import Confidence
 from bhoomicheck.schemas.finding import Finding
+from bhoomicheck.schemas.geo import RoadNetworkAssessment
 from bhoomicheck.schemas.parcel import ParcelIdentifier
 from bhoomicheck.schemas.provenance import Provenance
 from bhoomicheck.schemas.zoning import KudaMasterPlanExtract, ZoningReport
@@ -32,6 +33,17 @@ THIRD_PARTY_CAVEAT = (
 
 NOT_LEGIBLE_REASON = "not legible in the provided screenshot"
 
+# Clearing the road corridor is necessary but not sufficient: building
+# rules impose a further setback from the road boundary, varying by road
+# width and building use. We do not model those, and a "clear" result
+# must not be allowed to imply we did.
+SETBACK_RULES_CAVEAT = (
+    "measured against the proposed road corridor only -- building-rule "
+    "setbacks from the road boundary are additional and are not modelled "
+    "here, and the measurement is only as accurate as the digitised plan "
+    "it is computed from"
+)
+
 
 class ZoningAgent:
     """Builds a validated ZoningReport from one or more master-plan extracts."""
@@ -40,6 +52,7 @@ class ZoningAgent:
         self,
         parcel: ParcelIdentifier,
         extracts: list[tuple[Path, KudaMasterPlanExtract]],
+        road_assessment: RoadNetworkAssessment | None = None,
     ) -> ZoningReport:
         """Assemble a report from (uploaded screenshot, parsed extract) pairs.
 
@@ -51,22 +64,47 @@ class ZoningAgent:
                 filename is a system-known fact fed in by the caller,
                 same as DocumentAnalysisAgent's PDF paths -- never
                 guessed here.
+            road_assessment: Computed proximity to the master plan's
+                proposed road network, when parcel coordinates were
+                available. When this can answer the setback question it
+                REPLACES the screenshot-derived answer rather than
+                supplementing it -- a report carrying both a measured
+                and an eyeballed answer to one question makes the reader
+                arbitrate, and would also double-count in scoring.
         """
         fetched_at = datetime.now(timezone.utc).date()
+        # Geometry answers only for a parcel inside the area the network
+        # covers; outside it, the computed distances describe the edge of
+        # the map rather than the parcel (see RoadNetworkAssessment).
+        geometry_answers = (
+            road_assessment is not None and road_assessment.within_mapped_area
+        )
         findings = [
             finding
             for upload_path, extract in extracts
-            for finding in self._findings_for(upload_path, extract, fetched_at)
+            for finding in self._findings_for(
+                upload_path, extract, fetched_at, skip_road=geometry_answers
+            )
         ]
+        if geometry_answers:
+            assert road_assessment is not None  # narrowed by geometry_answers
+            findings.append(
+                self._computed_road_finding(road_assessment, extracts, fetched_at)
+            )
         return ZoningReport(
             parcel=parcel,
             generated_at=datetime.now(timezone.utc),
             extracts=[extract for _, extract in extracts],
+            road_assessment=road_assessment,
             findings=findings,
         )
 
     def _findings_for(
-        self, upload_path: Path, extract: KudaMasterPlanExtract, fetched_at: date
+        self,
+        upload_path: Path,
+        extract: KudaMasterPlanExtract,
+        fetched_at: date,
+        skip_road: bool = False,
     ) -> list[Finding]:
         provenance = Provenance(
             source_name=SOURCE_NAME,
@@ -77,11 +115,14 @@ class ZoningAgent:
             # from years ago may since have been revised.
             record_updated_at=extract.plan_approved_on,
         )
-        return [
-            self._zoning_classification_finding(extract, provenance),
-            self._road_widening_finding(extract, provenance),
-            self._ftl_buffer_finding(extract, provenance),
-        ]
+        findings = [self._zoning_classification_finding(extract, provenance)]
+        # Zone classification and FTL buffers are polygons the road
+        # network does not contain, so those stay screenshot-derived
+        # whatever the geometry can do for roads.
+        if not skip_road:
+            findings.append(self._road_widening_finding(extract, provenance))
+        findings.append(self._ftl_buffer_finding(extract, provenance))
+        return findings
 
     def _zoning_classification_finding(
         self, extract: KudaMasterPlanExtract, provenance: Provenance
@@ -165,4 +206,105 @@ class ZoningAgent:
             status="verified_ok",
             provenance=provenance,
             confidence=Confidence(level="medium", reason=THIRD_PARTY_CAVEAT),
+        )
+
+    def _computed_road_finding(
+        self,
+        assessment: RoadNetworkAssessment,
+        extracts: list[tuple[Path, KudaMasterPlanExtract]],
+        fetched_at: date,
+    ) -> Finding:
+        """The flagship check, answered by measurement rather than by eye.
+
+        This is the one finding in the whole system that states a number
+        a surveyor can go and disprove. Its confidence is "high" not
+        because the underlying plan is beyond doubt -- it is a
+        digitisation, and SETBACK_RULES_CAVEAT says so -- but because
+        the step this project previously got wrong, turning a map into a
+        yes/no, is no longer a judgement call.
+        """
+        provenance = Provenance(
+            source_name=assessment.network_label,
+            # "manual" of the three adapter modes: the network came from a
+            # file a human supplied, not a live API or a scrape.
+            source_type="manual",
+            document=f"{assessment.network_label} (computed geometry)",
+            fetched_at=fetched_at,
+        )
+
+        where = (
+            f"parcel at {assessment.location.lat:.6f}, {assessment.location.lon:.6f}"
+        )
+
+        # A measured result that contradicts the screenshot reading is
+        # worth surfacing: it is the clearest evidence of why this check
+        # stopped being a vision task, and it tells a reader which of the
+        # two numbers in their notes to throw away.
+        eyeballed = {
+            extract.road_widening_affects_parcel
+            for _, extract in extracts
+            if extract.road_widening_affects_parcel is not None
+        }
+        disagreement = ""
+        if eyeballed and (True in eyeballed) != bool(assessment.encroaching):
+            read_as = "affected" if True in eyeballed else "unaffected"
+            disagreement = (
+                f"; note this supersedes the master-plan screenshot, which was "
+                f"read as {read_as}"
+            )
+
+        if assessment.encroaching:
+            worst = assessment.encroaching[0]
+            roads = ", ".join(
+                f"{r.road_label} (centreline {r.distance_m:.1f} m away, corridor "
+                f"reaches {r.encroachment_m:.1f} m into the parcel)"
+                for r in assessment.encroaching
+            )
+            return Finding(
+                check_id="zoning.road_widening_setback",
+                claim=(
+                    f"a proposed road corridor reaches this parcel: {roads}. "
+                    f"The {worst.road_label} widening alone implies surrendering "
+                    f"land up to {worst.encroachment_m:.1f} m inside the boundary "
+                    f"({where})"
+                ),
+                status="issue_found",
+                provenance=provenance,
+                confidence=Confidence(
+                    level="high",
+                    reason=f"computed from plan geometry{disagreement} -- "
+                    + SETBACK_RULES_CAVEAT,
+                ),
+            )
+
+        nearest = assessment.nearest
+        if nearest is None:
+            # Guarded rather than assumed: within_mapped_area is only true
+            # when a nearest road was found, so this is unreachable today
+            # and must stay an honest "not verified" if that ever changes.
+            return Finding(
+                check_id="zoning.road_widening_setback",
+                claim="whether a proposed road requires a setback from this parcel",
+                status="not_verified",
+                provenance=provenance,
+                confidence=Confidence(
+                    level="low",
+                    reason="the road network returned no roads for this parcel",
+                ),
+            )
+        return Finding(
+            check_id="zoning.road_widening_setback",
+            claim=(
+                f"no proposed road corridor reaches this parcel: the nearest is "
+                f"the {nearest.road_label} road, centreline {nearest.distance_m:.1f} m "
+                f"away, whose corridor extends {nearest.half_width_m:.1f} m either "
+                f"side -- clear by {nearest.clearance_m:.1f} m ({where})"
+            ),
+            status="verified_ok",
+            provenance=provenance,
+            confidence=Confidence(
+                level="high",
+                reason=f"computed from plan geometry{disagreement} -- "
+                + SETBACK_RULES_CAVEAT,
+            ),
         )
