@@ -1,0 +1,86 @@
+{
+ "label": "Demo proposed road network (synthetic)",
+ "source": "SYNTHETIC TEST DATA -- invented roads at invented coordinates. Not derived from any real master plan. Offsets are chosen so distances from (17.0 N, 79.0 E) come out in round metres.",
+ "note": "45M=100m E, 60M=20m N (encroaches), 30M=500m S, 90M=1500m N, 24M stub starts 300m E (endpoint case), one segment has no width.",
+ "distilled_on": "2026-11-11",
+ "segments": [
+  {
+   "w": 45,
+   "p": [
+    [
+     79.00094041,
+     16.99
+    ],
+    [
+     79.00094041,
+     17.01
+    ]
+   ]
+  },
+  {
+   "w": 60,
+   "p": [
+    [
+     78.99,
+     17.00017986
+    ],
+    [
+     79.01,
+     17.00017986
+    ]
+   ]
+  },
+  {
+   "w": 30,
+   "p": [
+    [
+     78.99,
+     16.99550339
+    ],
+    [
+     79.01,
+     16.99550339
+    ]
+   ]
+  },
+  {
+   "w": 90,
+   "p": [
+    [
+     78.99,
+     17.01348982
+    ],
+    [
+     79.01,
+     17.01348982
+    ]
+   ]
+  },
+  {
+   "w": 24,
+   "p": [
+    [
+     79.00282124,
+     17.0
+    ],
+    [
+     79.00846372,
+     17.0
+    ]
+   ]
+  },
+  {
+   "w": null,
+   "p": [
+    [
+     79.0,
+     17.00004497
+    ],
+    [
+     79.001,
+     17.00004497
+    ]
+   ]
+  }
+ ]
+}
