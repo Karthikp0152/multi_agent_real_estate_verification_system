@@ -236,3 +236,18 @@ rules:
       high: 25
       medium: 15
       low: 8
+
+  # "Nature of Land" on Bhu Bharati: patta vs assigned/government.
+  # Assigned land carries transfer restrictions and often cannot be
+  # legally sold at all, so an issue here is as serious as prohibited
+  # land. Weighted to match.
+  land_records.assigned_land:
+    verified_ok: 0
+    not_verified:
+      high: 10
+      medium: 10
+      low: 10
+    issue_found:
+      high: 45
+      medium: 30
+      low: 15
