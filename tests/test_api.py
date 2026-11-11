@@ -177,3 +177,90 @@ def test_index_page_is_served(client: TestClient) -> None:
     assert response.status_code == 200
     assert "BhoomiCheck" in response.text
     assert "Start check" in response.text
+
+
+# --- optional parcel coordinates ----------------------------------------
+
+from bhoomicheck.geo.road_network import RoadNetwork  # noqa: E402
+
+NETWORK_FIXTURE = Path(__file__).parent / "fixtures" / "demo_road_network.json"
+
+
+def _post(client: TestClient, **extra: str):
+    data = {
+        "survey_no": "123/A",
+        "village": "Hasanparthy",
+        "mandal": "Hasanparthy",
+        "seller_name": "K. Rajaiah",
+    }
+    data.update(extra)
+    return client.post(
+        "/api/checks",
+        data=data,
+        files=[("documents", ("deed.pdf", b"%PDF-1.4 fake", "application/pdf"))],
+    )
+
+
+def test_blank_coordinate_fields_are_accepted(client: TestClient) -> None:
+    """The default path, and the one an earlier version broke.
+
+    An HTML form submits "" for a field the user left empty. Typing the
+    parameters as floats made FastAPI reject "" with a 422, which would
+    have failed every check started without coordinates -- i.e. almost
+    all of them.
+    """
+    response = _post(client, latitude="", longitude="")
+    assert response.status_code == 200, response.text
+
+
+def test_omitting_coordinates_entirely_is_accepted(client: TestClient) -> None:
+    assert _post(client).status_code == 200
+
+
+def test_half_a_coordinate_is_rejected_rather_than_ignored(client: TestClient) -> None:
+    """Silently dropping it would downgrade the setback check unnoticed."""
+    response = _post(client, latitude="17.856513")
+    assert response.status_code == 400
+    assert "together" in response.json()["detail"]
+
+
+def test_a_non_numeric_coordinate_is_rejected_with_a_clear_message(
+    client: TestClient,
+) -> None:
+    response = _post(client, latitude="north a bit", longitude="79.63")
+    assert response.status_code == 400
+    assert "decimal degrees" in response.json()["detail"]
+
+
+def test_an_out_of_range_coordinate_is_rejected(client: TestClient) -> None:
+    """LatLon's own validators do this; the endpoint must not bypass them."""
+    response = _post(client, latitude="917.0", longitude="79.63")
+    assert response.status_code in (400, 422)
+
+
+def test_supplied_coordinates_make_the_setback_check_measured(tmp_path: Path) -> None:
+    """End to end over HTTP: a coordinate in, a measured finding out."""
+    orchestrator = Orchestrator(
+        road_network=RoadNetwork.from_json(NETWORK_FIXTURE),
+        document_agent=DocumentAnalysisAgent(FakeProvider([VALID_DOCUMENT_PAYLOAD] * 10)),
+        kuda_adapter=FakeAdapter(KudaMasterPlanExtract(road_widening_affects_parcel=False)),
+        litigation_adapter=FakeAdapter(LitigationSearchResult(searched_name="K. Rajaiah")),
+        land_records_adapter=FakeAdapter(LandRecordExtract(prohibited_status=False)),
+        owner_background_adapter=FakeAdapter(OwnerBackgroundExtract(is_poa_sale=False)),
+        checkpointer=sqlite_checkpointer(tmp_path / "geo.db"),
+    )
+    client = TestClient(create_app(orchestrator=orchestrator, data_root=tmp_path))
+    # The synthetic fixture's parcel, where a 60 M corridor encroaches.
+    started = _post(client, latitude="17.0", longitude="79.0")
+    assert started.status_code == 200, started.text
+    check_id = started.json()["check_id"]
+
+    for pending in started.json()["pending"]:
+        client.post(
+            f"/api/checks/{check_id}/uploads/{pending['interrupt_id']}",
+            files=[("file", ("shot.png", b"\x89PNG fake", "image/png"))],
+        )
+
+    html = client.get(f"/api/checks/{check_id}/report.html").text
+    assert "60 M" in html
+    assert "encroaches" in html

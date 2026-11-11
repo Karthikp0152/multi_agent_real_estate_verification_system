@@ -36,6 +36,7 @@ from bhoomicheck.orchestrator.graph import Orchestrator, PendingUpload, sqlite_c
 from bhoomicheck.report.html import render_html
 from bhoomicheck.schemas.litigation import LitigationSearchQuery
 from bhoomicheck.schemas.owner_background import OwnerBackgroundQuery
+from bhoomicheck.schemas.geo import LatLon
 from bhoomicheck.schemas.parcel import ParcelIdentifier
 from bhoomicheck.schemas.risk_report import RiskReport
 
@@ -100,9 +101,17 @@ def create_app(
         mandal: str = Form(...),
         seller_name: str = Form(...),
         district: str = Form("Warangal"),
+        latitude: str | None = Form(None),
+        longitude: str | None = Form(None),
         documents: list[UploadFile] = [],  # noqa: B006 - FastAPI reads this signature
     ) -> CheckStatus:
-        """Start a check. Deed PDFs go in here; portal screenshots come later."""
+        """Start a check. Deed PDFs go in here; portal screenshots come later.
+
+        latitude/longitude are optional but change the quality of the
+        headline answer: with them the master-plan setback check is
+        measured against the proposed road network; without them it falls
+        back to a model reading a map screenshot.
+        """
         if not documents:
             raise HTTPException(
                 status_code=400, detail="at least one document (deed/EC) is required"
@@ -110,6 +119,31 @@ def create_app(
 
         check_id = f"{uuid_for(survey_no)}"
         saved = [save_upload(f, check_dir_for(uploads_root, check_id)) for f in documents]
+
+        lat_text = (latitude or "").strip()
+        lon_text = (longitude or "").strip()
+        # Half a coordinate is a mistake, not a partial input: silently
+        # dropping it would quietly downgrade the setback check to the
+        # screenshot reading while the user believed they had supplied a
+        # position.
+        if bool(lat_text) != bool(lon_text):
+            raise HTTPException(
+                status_code=400,
+                detail="latitude and longitude must be supplied together",
+            )
+        location = None
+        if lat_text and lon_text:
+            try:
+                # LatLon's own validators handle range; this only handles
+                # "the user typed something that isn't a number".
+                location = LatLon(
+                    lat=float(lat_text), lon=float(lon_text), source="gis_readout"
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"latitude/longitude must be decimal degrees: {exc}",
+                ) from exc
 
         outcome = orchestrator.start(
             thread_id=check_id,
@@ -119,6 +153,7 @@ def create_app(
             pdf_paths=saved,
             litigation_query=LitigationSearchQuery(full_name=seller_name),
             owner_background_query=OwnerBackgroundQuery(seller_name=seller_name),
+            location=location,
         )
         return _status(check_id, outcome)
 

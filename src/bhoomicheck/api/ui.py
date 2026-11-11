@@ -74,6 +74,14 @@ PAGE = """<!DOCTYPE html>
         <div><label>Mandal</label><input type="text" name="mandal" required placeholder="Hasanparthy"></div>
         <div><label>District</label><input type="text" name="district" value="Warangal"></div>
       </div>
+      <p class="muted">Coordinates are optional. With them, the master-plan
+      setback check is <b>measured</b> against the proposed road network;
+      without them it falls back to reading a map screenshot. Read them off
+      the parcel in the Bhu Bharati GIS viewer.</p>
+      <div class="row">
+        <div><label>Latitude (optional)</label><input type="text" name="latitude" placeholder="17.856513"></div>
+        <div><label>Longitude (optional)</label><input type="text" name="longitude" placeholder="79.630249"></div>
+      </div>
       <div style="margin:0 0 14px">
         <label>Seller / owner name</label>
         <input type="text" name="seller_name" required placeholder="as printed on the deed">
