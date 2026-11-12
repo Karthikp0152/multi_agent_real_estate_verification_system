@@ -48,6 +48,7 @@ from bhoomicheck.orchestrator.graph import Orchestrator, PendingUpload, sqlite_c
 from bhoomicheck.report.html import render_html
 from bhoomicheck.schemas.litigation import LitigationSearchQuery
 from bhoomicheck.schemas.owner_background import OwnerBackgroundQuery
+from bhoomicheck.geo.boundary import BoundaryParseError, parse_boundary
 from bhoomicheck.schemas.geo import LatLon
 from bhoomicheck.schemas.parcel import ParcelIdentifier
 from bhoomicheck.schemas.risk_report import RiskReport
@@ -120,6 +121,14 @@ def main() -> int:
         "rather than read off a map screenshot",
     )
     parser.add_argument(
+        "--boundary",
+        default=None,
+        metavar="VERTICES",
+        help='parcel boundary as "lat,lon; lat,lon; ..." (at least 3). Better '
+        "than --lat/--lon: measures from the parcel's real edges, so a road "
+        "clipping a corner is not missed",
+    )
+    parser.add_argument(
         "--html", type=Path, metavar="PATH", help="also write the report as an HTML file"
     )
     parser.add_argument(
@@ -162,6 +171,12 @@ def main() -> int:
             # while the user believed they had given a position.
             if (args.lat is None) != (args.lon is None):
                 parser.error("--lat and --lon must be given together")
+            boundary = None
+            if args.boundary:
+                try:
+                    boundary = parse_boundary(args.boundary)
+                except BoundaryParseError as exc:
+                    parser.error(f"--boundary: {exc}")
             if not args.pdfs:
                 parser.error("starting a new check needs at least one document PDF")
             missing_files = [p for p in args.pdfs if not p.is_file()]
@@ -173,10 +188,17 @@ def main() -> int:
                 if args.lat is not None
                 else None
             )
-            if location is None:
+            if boundary is not None:
+                print(f"Measuring the setback from a {len(boundary)}-vertex boundary")
+            elif location is None:
                 print(
-                    "note: no --lat/--lon given, so the master-plan setback check "
-                    "will be read off a screenshot rather than measured"
+                    "note: no --lat/--lon or --boundary given, so the master-plan "
+                    "setback check will be read off a screenshot rather than measured"
+                )
+            else:
+                print(
+                    "note: measuring from a single point; --boundary gives a "
+                    "conclusive answer by using the parcel's real edges"
                 )
 
             parcel = ParcelIdentifier(
@@ -199,6 +221,7 @@ def main() -> int:
                     seller_name=args.seller_name, poa_document_no=args.poa_document_no
                 ),
                 location=location,
+                boundary=boundary,
             )
             if isinstance(started, RiskReport):
                 report = started

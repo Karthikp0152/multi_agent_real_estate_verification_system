@@ -31,8 +31,10 @@ PAGE = """<!DOCTYPE html>
   .card{background:#fff;border:1px solid var(--line);border-radius:4px;
         padding:22px;margin:0 0 16px}
   label{display:block;font-size:.85rem;font-weight:600;margin:0 0 4px}
-  input[type=text],input[type=file]{width:100%;padding:9px 11px;border:1px solid var(--line);
-        border-radius:3px;font:inherit;font-size:.95rem;background:#fff}
+  input[type=text],input[type=file],textarea{width:100%;padding:9px 11px;border:1px solid var(--line);
+        border-radius:3px;font:inherit;font-size:.95rem;background:#fff;box-sizing:border-box}
+  /* Coordinates are easier to scan and align in a monospaced font. */
+  textarea{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;resize:vertical}
   .row{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:0 0 14px}
   @media(max-width:600px){.row{grid-template-columns:1fr}}
   button{background:var(--accent);color:#fff;border:0;border-radius:3px;
@@ -74,13 +76,22 @@ PAGE = """<!DOCTYPE html>
         <div><label>Mandal</label><input type="text" name="mandal" required placeholder="Hasanparthy"></div>
         <div><label>District</label><input type="text" name="district" value="Warangal"></div>
       </div>
-      <p class="muted">Coordinates are optional. With them, the master-plan
-      setback check is <b>measured</b> against the proposed road network;
-      without them it falls back to reading a map screenshot. Read them off
-      the parcel in the Bhu Bharati GIS viewer.</p>
+      <p class="muted">Coordinates are optional, and change how trustworthy
+      the headline setback answer is. With none, it falls back to reading a map
+      screenshot. With a point, it is <b>measured</b> from that point. With a
+      boundary, it is measured from the parcel's real edges &mdash; the only
+      conclusive form, since a road can clip a corner while sitting clear of
+      the centre. Read either off the parcel in the Bhu Bharati GIS viewer.</p>
       <div class="row">
         <div><label>Latitude (optional)</label><input type="text" name="latitude" placeholder="17.856513"></div>
         <div><label>Longitude (optional)</label><input type="text" name="longitude" placeholder="79.630249"></div>
+      </div>
+      <div style="margin:0 0 14px">
+        <label>Parcel boundary (optional, best)</label>
+        <textarea name="boundary" rows="3" placeholder="17.856513,79.630249
+17.856600,79.630400
+17.856400,79.630500"></textarea>
+        <div class="muted">One <code>lat,lon</code> per line, at least 3 corners. Overrides the point above.</div>
       </div>
       <div style="margin:0 0 14px">
         <label>Seller / owner name</label>

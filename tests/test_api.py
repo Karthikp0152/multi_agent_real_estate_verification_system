@@ -264,3 +264,82 @@ def test_supplied_coordinates_make_the_setback_check_measured(tmp_path: Path) ->
     html = client.get(f"/api/checks/{check_id}/report.html").text
     assert "60 M" in html
     assert "encroaches" in html
+
+
+# --- parcel boundary over HTTP ------------------------------------------
+#
+# A square around the synthetic fixture's parcel, whose eastern edge sits
+# inside the 45 M corridor even though its centre is 77.5 m clear of it.
+
+_SQUARE = (
+    "16.99928055,78.99924767\n"
+    "16.99928055,79.00075233\n"
+    "17.00071945,79.00075233\n"
+    "17.00071945,78.99924767"
+)
+
+
+def _geo_client(tmp_path: Path) -> TestClient:
+    orchestrator = Orchestrator(
+        road_network=RoadNetwork.from_json(NETWORK_FIXTURE),
+        document_agent=DocumentAnalysisAgent(FakeProvider([VALID_DOCUMENT_PAYLOAD] * 10)),
+        kuda_adapter=FakeAdapter(KudaMasterPlanExtract(road_widening_affects_parcel=False)),
+        litigation_adapter=FakeAdapter(LitigationSearchResult(searched_name="K. Rajaiah")),
+        land_records_adapter=FakeAdapter(LandRecordExtract(prohibited_status=False)),
+        owner_background_adapter=FakeAdapter(OwnerBackgroundExtract(is_poa_sale=False)),
+        checkpointer=sqlite_checkpointer(tmp_path / "geo.db"),
+    )
+    return TestClient(create_app(orchestrator=orchestrator, data_root=tmp_path))
+
+
+def _run_to_report(client: TestClient, **extra: str) -> str:
+    started = _post(client, **extra)
+    assert started.status_code == 200, started.text
+    check_id = started.json()["check_id"]
+    for pending in started.json()["pending"]:
+        client.post(
+            f"/api/checks/{check_id}/uploads/{pending['interrupt_id']}",
+            files=[("file", ("shot.png", b"\x89PNG fake", "image/png"))],
+        )
+    return client.get(f"/api/checks/{check_id}/report.html").text
+
+
+def test_a_boundary_is_measured_from_the_parcel_edges(tmp_path: Path) -> None:
+    html = _run_to_report(_geo_client(tmp_path), boundary=_SQUARE)
+    assert "Measured from the parcel boundary (4 vertices" in html
+    # The 45 M road is clear of the centre but 2.5 m inside the edge.
+    assert "encroaches 2.5 m" in html
+
+
+def test_a_boundary_takes_precedence_over_a_point(tmp_path: Path) -> None:
+    """Both supplied: the boundary is the better evidence, so it decides."""
+    html = _run_to_report(
+        _geo_client(tmp_path), latitude="17.0", longitude="79.0", boundary=_SQUARE
+    )
+    assert "Measured from the parcel boundary" in html
+    assert "Measured from a single point" not in html
+
+
+def test_a_point_only_report_warns_that_it_is_not_conclusive(tmp_path: Path) -> None:
+    html = _run_to_report(_geo_client(tmp_path), latitude="17.0", longitude="79.0")
+    assert "Measured from a single point" in html
+    assert "would not appear here" in html
+
+
+def test_a_blank_boundary_field_is_ignored(tmp_path: Path) -> None:
+    """The default path: the textarea is submitted empty."""
+    assert _post(_geo_client(tmp_path), boundary="   \n ").status_code == 200
+
+
+def test_an_unreadable_boundary_is_rejected_with_a_clear_message(
+    tmp_path: Path,
+) -> None:
+    response = _post(_geo_client(tmp_path), boundary="17.0,79.0\nnorth,79.1\n17.2,79.0")
+    assert response.status_code == 400
+    assert "decimal degrees" in response.json()["detail"]
+
+
+def test_a_two_vertex_boundary_is_rejected(tmp_path: Path) -> None:
+    response = _post(_geo_client(tmp_path), boundary="17.0,79.0\n17.1,79.1")
+    assert response.status_code == 400
+    assert "at least 3" in response.json()["detail"]

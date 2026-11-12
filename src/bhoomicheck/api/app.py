@@ -36,6 +36,7 @@ from bhoomicheck.orchestrator.graph import Orchestrator, PendingUpload, sqlite_c
 from bhoomicheck.report.html import render_html
 from bhoomicheck.schemas.litigation import LitigationSearchQuery
 from bhoomicheck.schemas.owner_background import OwnerBackgroundQuery
+from bhoomicheck.geo.boundary import BoundaryParseError, parse_boundary
 from bhoomicheck.schemas.geo import LatLon
 from bhoomicheck.schemas.parcel import ParcelIdentifier
 from bhoomicheck.schemas.risk_report import RiskReport
@@ -103,14 +104,17 @@ def create_app(
         district: str = Form("Warangal"),
         latitude: str | None = Form(None),
         longitude: str | None = Form(None),
+        boundary: str | None = Form(None),
         documents: list[UploadFile] = [],  # noqa: B006 - FastAPI reads this signature
     ) -> CheckStatus:
         """Start a check. Deed PDFs go in here; portal screenshots come later.
 
-        latitude/longitude are optional but change the quality of the
-        headline answer: with them the master-plan setback check is
-        measured against the proposed road network; without them it falls
-        back to a model reading a map screenshot.
+        Coordinates are optional but change the quality of the headline
+        answer. With none, the master-plan setback check falls back to a
+        model reading a map screenshot. With latitude/longitude it is
+        measured from that point. With a `boundary` it is measured from
+        the parcel's real edges, which is the only conclusive form --
+        a corridor can clip a corner while sitting clear of the centre.
         """
         if not documents:
             raise HTTPException(
@@ -131,6 +135,13 @@ def create_app(
                 status_code=400,
                 detail="latitude and longitude must be supplied together",
             )
+        parsed_boundary = None
+        if boundary and boundary.strip():
+            try:
+                parsed_boundary = parse_boundary(boundary)
+            except BoundaryParseError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
         location = None
         if lat_text and lon_text:
             try:
@@ -154,6 +165,7 @@ def create_app(
             litigation_query=LitigationSearchQuery(full_name=seller_name),
             owner_background_query=OwnerBackgroundQuery(seller_name=seller_name),
             location=location,
+            boundary=parsed_boundary,
         )
         return _status(check_id, outcome)
 

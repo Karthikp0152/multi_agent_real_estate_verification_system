@@ -56,8 +56,9 @@ shown to be wrong.
 It is now computed. [`geo/road_network.py`](src/bhoomicheck/geo/road_network.py)
 loads the proposed road network (each segment carrying its width from
 the plan's own layer naming), projects it onto a local metric frame
-centred on the parcel, and measures point-to-segment distance to every
-road class. A real result:
+centred on the parcel, and measures the distance to every road class —
+from a single coordinate, or, better, from the parcel's boundary ring.
+A real result:
 
 ```
 Proposed road   Width   Half-width   Distance to centreline   Result
@@ -75,6 +76,17 @@ measurement contradicts the screenshot reading, the finding says so.
 No geospatial dependency: the mathematics is a local projection and
 point-to-segment distance, short enough to read. Pulling in GEOS and
 PROJ for two functions would have hidden the only interesting part.
+
+**Point versus boundary.** Measuring from one coordinate is easier to
+obtain but can understate the risk: a corridor can clip a parcel's
+corner while sitting comfortably clear of its centre. On the test
+fixture a road reported *"clear by 77.5 m"* from the centre point turned
+out to be **2.5 m inside the parcel** once its real edges were used. So
+a point-based clearance is reported at medium confidence with that
+limitation stated; only a boundary-based one earns high confidence. A
+centreline that crosses the parcel outright is distinguished from one
+that merely reaches over an edge, because the whole corridor width cuts
+through the land.
 
 **What it does not do.** It measures the road corridor only.
 Building-rule setbacks from the road boundary are additional and are not
@@ -121,7 +133,7 @@ are different claims.
 
 | | Status |
 |---|---|
-| Geometry engine | **Validated.** Hand-checkable synthetic fixture; real-world result reproduced from source data |
+| Geometry engine | **Validated.** Hand-checkable synthetic fixture (point and boundary modes); real-world result reproduced from source data |
 | Bhu Bharati extraction | **Validated** against a real result page (13/15 fields, both nulls correct). Produced three schema corrections |
 | KUDA, eCourts, IGRS extraction | **Not validated.** `parse()` is implemented and field labels are best-effort; those adapters say so in their docstrings |
 | Orchestration, scoring, reporting | 200 tests, including two-process SQLite resume |
@@ -153,7 +165,7 @@ CLI:
 python -m bhoomicheck \
   --survey-no 16/D --village Chennaram --mandal Wardhannapet \
   --seller-name "<as printed on the deed>" \
-  --lat 17.856513 --lon 79.630249 \
+  --boundary "17.8562,79.6299; 17.8562,79.6306; 17.8568,79.6306" \
   --html report.html \
   sale_deed.pdf
 ```

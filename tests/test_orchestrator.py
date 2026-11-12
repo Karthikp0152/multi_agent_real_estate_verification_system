@@ -441,3 +441,54 @@ def test_a_measured_setback_survives_a_sqlite_checkpoint(tmp_path: Path) -> None
     # Not a dict: the typed object came back as its own class.
     assert isinstance(zoning.road_assessment.location, LatLon)
     assert zoning.road_assessment.location.source == "surveyed"
+
+
+def test_a_boundary_survives_a_sqlite_checkpoint(tmp_path: Path) -> None:
+    """Same serialization concern as the coordinate, but a list of them.
+
+    A list[LatLon] that round-tripped to a list of dicts would make
+    assess() fail or, worse, silently fall back to point mode.
+    """
+    db = tmp_path / "boundary.db"
+    dlat, dlon = 80 / 111194.9266, 80 / 106336.2372
+    square = [
+        LatLon(lat=17.0 - dlat, lon=79.0 - dlon, source="surveyed"),
+        LatLon(lat=17.0 - dlat, lon=79.0 + dlon, source="surveyed"),
+        LatLon(lat=17.0 + dlat, lon=79.0 + dlon, source="surveyed"),
+        LatLon(lat=17.0 + dlat, lon=79.0 - dlon, source="surveyed"),
+    ]
+
+    def build() -> Orchestrator:
+        return Orchestrator(
+            road_network=RoadNetwork.from_json(NETWORK_FIXTURE),
+            document_agent=DocumentAnalysisAgent(FakeProvider([VALID_DOCUMENT_PAYLOAD])),
+            kuda_adapter=FakeAdapter(KudaMasterPlanExtract(road_widening_affects_parcel=False)),
+            litigation_adapter=FakeAdapter(
+                LitigationSearchResult(searched_name="K. Rajaiah", cases=[])
+            ),
+            land_records_adapter=FakeAdapter(LandRecordExtract(prohibited_status=False)),
+            owner_background_adapter=FakeAdapter(OwnerBackgroundExtract(is_poa_sale=False)),
+            checkpointer=sqlite_checkpointer(db),
+        )
+
+    first = build()
+    pending = first.start(
+        thread_id="boundary-sqlite",
+        parcel=PARCEL,
+        pdf_paths=[Path("sale_deed_2015_1234.pdf")],
+        litigation_query=LITIGATION_QUERY,
+        owner_background_query=OWNER_BACKGROUND_QUERY,
+        boundary=square,
+    )
+    assert isinstance(pending, list)
+
+    second = build()
+    report = _resolve_everything(second, "boundary-sqlite", second.pending_uploads("boundary-sqlite"))
+
+    zoning = next(r for r in report.specialist_reports if r.agent_name == "zoning")
+    assert zoning.road_assessment is not None
+    assert zoning.road_assessment.measured_from_boundary is True
+    assert len(zoning.road_assessment.boundary) == 4
+    assert all(isinstance(v, LatLon) for v in zoning.road_assessment.boundary)
+    # And the measurement is the boundary one, not a point fallback.
+    assert _setback_finding(report).confidence.level == "high"

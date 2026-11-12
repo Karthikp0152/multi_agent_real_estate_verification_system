@@ -188,11 +188,26 @@ def _road_table_html(assessment: RoadNetworkAssessment) -> str:
         else " <b>This parcel lies outside the area this network covers, so "
         "these distances are not evidence about it.</b>"
     )
+    # How it was measured belongs in the caption, because it changes what
+    # every number below it means: a point-based clearance says nothing
+    # about a corner the corridor may already cover.
+    if assessment.measured_from_boundary:
+        measured = (
+            f"Measured from the parcel boundary ({len(assessment.boundary)} "
+            f"vertices, centroid {loc.lat:.6f}, {loc.lon:.6f})"
+        )
+        qualifier = ""
+    else:
+        measured = f"Measured from a single point at {loc.lat:.6f}, {loc.lon:.6f}"
+        qualifier = (
+            " <b>A road clipping an edge or corner would not appear here;"
+            " supply the parcel boundary for a conclusive answer.</b>"
+        )
     caption = (
-        f"Measured from {loc.lat:.6f}, {loc.lon:.6f} "
-        f"({escape(loc.source.replace('_', ' '))}) against "
+        f"{measured} ({escape(loc.source.replace('_', ' '))}) against "
         f"{escape(assessment.network_label)}. Distances are to each road's "
         f"centreline; the corridor extends the half-width either side."
+        + qualifier
         + coverage
     )
 

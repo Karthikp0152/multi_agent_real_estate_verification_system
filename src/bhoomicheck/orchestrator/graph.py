@@ -150,6 +150,11 @@ class OrchestratorState(TypedDict):
             caller may not have. Supplying it is what lets zoning_node
             measure the master-plan setback instead of reading it off a
             screenshot.
+        boundary: The parcel's boundary ring, when it is known. Stronger
+            evidence than `location`: a corridor can clip a parcel's
+            corner while sitting clear of its centre, so a point-based
+            clearance can understate the risk. When both are present the
+            boundary decides.
         litigation_query: Who to search eCourts for.
         owner_background_query: Who to search IGRS for.
         document_report / zoning_report / litigation_report /
@@ -167,6 +172,7 @@ class OrchestratorState(TypedDict):
     parcel: ParcelIdentifier
     pdf_paths: list[Path]
     location: LatLon | None
+    boundary: list[LatLon] | None
     litigation_query: LitigationSearchQuery
     owner_background_query: OwnerBackgroundQuery
     document_report: DocumentAnalysisReport | None
@@ -310,9 +316,11 @@ class Orchestrator:
         # either is not an error -- the agent falls back to the
         # screenshot-derived answer and says so in the finding.
         location = state.get("location")
+        boundary = state.get("boundary")
+        have_geometry = location is not None or bool(boundary)
         assessment = (
-            self.road_network.assess(location)
-            if self.road_network is not None and location is not None
+            self.road_network.assess(location=location, boundary=boundary)
+            if self.road_network is not None and have_geometry
             else None
         )
         report = self.zoning_agent.report(
@@ -380,6 +388,7 @@ class Orchestrator:
         litigation_query: LitigationSearchQuery,
         owner_background_query: OwnerBackgroundQuery,
         location: LatLon | None = None,
+        boundary: list[LatLon] | None = None,
     ) -> list[PendingUpload] | RiskReport:
         """Begin a run. Returns pending uploads, or a RiskReport if nothing paused.
 
@@ -392,6 +401,8 @@ class Orchestrator:
                 master-plan setback check falls back to reading a map
                 screenshot, so supplying it materially changes how
                 trustworthy the headline finding is.
+            boundary: The parcel's boundary ring, if known. Better than
+                `location`, and takes precedence over it.
         """
         config = {"configurable": {"thread_id": thread_id}}
         result = self._graph.invoke(
@@ -399,6 +410,7 @@ class Orchestrator:
                 "parcel": parcel,
                 "pdf_paths": pdf_paths,
                 "location": location,
+                "boundary": boundary,
                 "litigation_query": litigation_query,
                 "owner_background_query": owner_background_query,
                 "document_report": None,
