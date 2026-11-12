@@ -100,7 +100,11 @@ class RoadNetworkAssessment(BaseModel):
     """The result of measuring one parcel against a proposed road network.
 
     Attributes:
-        location: The coordinate measured from.
+        location: The coordinate measured from, or -- when a boundary
+            was supplied -- the centroid of that boundary, kept as the
+            parcel's representative point for reporting.
+        boundary: The parcel's boundary ring, when one was supplied.
+            Empty when only a single coordinate was available.
         network_label: Which network answered, e.g. "KUDA Master Plan
             2041 - proposed road network". Carried so a finding can name
             its source instead of saying "the geometry".
@@ -120,9 +124,21 @@ class RoadNetworkAssessment(BaseModel):
     """
 
     location: LatLon
+    boundary: list[LatLon] = []
     network_label: str = Field(min_length=1)
     within_mapped_area: bool
     roads: list[RoadProximity] = []
+
+    @computed_field
+    @property
+    def measured_from_boundary(self) -> bool:
+        """Whether distances are to the parcel's edges or to one point.
+
+        Reported because it changes what a clearance means. Measured from
+        a single point, "clear by 12 m" says nothing about a corner 30 m
+        away that the corridor may already cover.
+        """
+        return len(self.boundary) >= 3
 
     @computed_field
     @property

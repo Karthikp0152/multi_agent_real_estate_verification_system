@@ -156,3 +156,123 @@ def test_an_empty_network_is_rejected_at_construction(tmp_path: Path) -> None:
     empty.write_text('{"label": "x", "source": "y", "segments": []}', encoding="utf-8")
     with pytest.raises(RoadNetworkError, match="no usable segments"):
         RoadNetwork.from_json(empty)
+
+
+# --- measuring from a parcel boundary rather than a point ---------------
+#
+# A 160 m square centred on the test parcel. Its eastern edge sits 80 m
+# east of centre, so the 45 M road (centreline 100 m east, corridor
+# reaching 22.5 m) is 20 m from that edge and therefore 2.5 m INSIDE the
+# parcel -- while from the centre point it reads "clear by 77.5 m".
+
+_D_LAT_80M = 80 / 111194.9266
+_D_LON_80M = 80 / 106336.2372
+
+
+def square_boundary(size_m: float = 80.0) -> list[LatLon]:
+    dlat = size_m / 111194.9266
+    dlon = size_m / 106336.2372
+    return [
+        LatLon(lat=17.0 - dlat, lon=79.0 - dlon, source="surveyed"),
+        LatLon(lat=17.0 - dlat, lon=79.0 + dlon, source="surveyed"),
+        LatLon(lat=17.0 + dlat, lon=79.0 + dlon, source="surveyed"),
+        LatLon(lat=17.0 + dlat, lon=79.0 - dlon, source="surveyed"),
+    ]
+
+
+def test_a_boundary_finds_an_encroachment_a_point_misses(network: RoadNetwork) -> None:
+    """The reason boundary support exists.
+
+    A corridor can clip a parcel's edge while being comfortably far from
+    its centre. Measured from the centre the 45 M road is clear by
+    77.5 m; measured from the parcel's actual eastern edge it is 2.5 m
+    inside the land.
+    """
+    from_point = {r.road_label: r for r in network.assess(PARCEL).roads}
+    from_edges = {r.road_label: r for r in network.assess(boundary=square_boundary()).roads}
+
+    assert from_point["45 M"].encroaches is False
+    assert from_point["45 M"].clearance_m == pytest.approx(77.5, abs=TOL)
+
+    assert from_edges["45 M"].encroaches is True
+    assert from_edges["45 M"].encroachment_m == pytest.approx(2.5, abs=TOL)
+
+
+def test_a_centreline_crossing_the_parcel_is_at_distance_zero(
+    network: RoadNetwork,
+) -> None:
+    """The 60 M road runs east-west 20 m north of centre, so it passes
+    straight through a 160 m square. Distance is zero and the whole
+    half-width bites -- a case no endpoint measurement would find, since
+    the road's own endpoints are far outside the parcel.
+    """
+    roads = {r.road_label: r for r in network.assess(boundary=square_boundary()).roads}
+    assert roads["60 M"].distance_m == 0.0
+    assert roads["60 M"].encroachment_m == pytest.approx(30.0, abs=TOL)
+
+
+def test_distances_shrink_by_the_parcel_radius(network: RoadNetwork) -> None:
+    """Sanity check against an independently predictable number.
+
+    The 24 M stub lies due east, its near end 300 m from centre. An 80 m
+    square's eastern edge is 80 m closer, so the distance must be 220 m.
+    """
+    roads = {r.road_label: r for r in network.assess(boundary=square_boundary()).roads}
+    assert roads["24 M"].distance_m == pytest.approx(220.0, abs=TOL)
+
+
+def test_the_boundary_ring_is_closed_automatically(network: RoadNetwork) -> None:
+    """The edge from the last vertex back to the first is a real edge.
+
+    Without closing the ring, a road encroaching only across that final
+    edge would be missed. Here the square is given anticlockwise from the
+    south-west corner, so the closing edge is the western one; a road
+    reaching it must still be found.
+    """
+    assessment = network.assess(boundary=square_boundary())
+    assert assessment.measured_from_boundary is True
+    assert len(assessment.boundary) == 4
+    # The 30 M road is 500 m south of centre; the square's southern edge
+    # is 80 m closer, so 420 m -- found via an edge, not a vertex.
+    roads = {r.road_label: r for r in assessment.roads}
+    assert roads["30 M"].distance_m == pytest.approx(420.0, abs=TOL)
+
+
+def test_the_report_point_is_the_boundary_centroid(network: RoadNetwork) -> None:
+    assessment = network.assess(boundary=square_boundary())
+    assert assessment.location.lat == pytest.approx(17.0, abs=1e-9)
+    assert assessment.location.lon == pytest.approx(79.0, abs=1e-9)
+    # The coordinate's trust level carries over from the boundary data.
+    assert assessment.location.source == "surveyed"
+
+
+def test_a_point_assessment_is_flagged_as_not_boundary_measured(
+    network: RoadNetwork,
+) -> None:
+    """So a reader can tell how much a clearance is worth."""
+    assert network.assess(PARCEL).measured_from_boundary is False
+
+
+def test_a_degenerate_boundary_is_rejected_rather_than_guessed(
+    network: RoadNetwork,
+) -> None:
+    """Two points are a line, not a parcel.
+
+    Silently treating them as a point would measure from somewhere the
+    caller did not ask about.
+    """
+    with pytest.raises(RoadNetworkError, match="at least 3 vertices"):
+        network.assess(boundary=square_boundary()[:2])
+
+
+def test_assess_needs_either_a_location_or_a_boundary(network: RoadNetwork) -> None:
+    with pytest.raises(RoadNetworkError, match="either a location or a boundary"):
+        network.assess()
+
+
+def test_a_boundary_wins_when_both_are_supplied(network: RoadNetwork) -> None:
+    """The boundary is the better evidence, so it decides."""
+    both = network.assess(location=PARCEL, boundary=square_boundary())
+    assert both.measured_from_boundary is True
+    roads = {r.road_label: r for r in both.roads}
+    assert roads["45 M"].encroaches is True

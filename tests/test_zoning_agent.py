@@ -152,7 +152,11 @@ def test_a_clear_parcel_states_its_margin_instead_of_just_passing() -> None:
     finding = _road_finding(report)
     assert finding.status == "verified_ok"
     assert "clear by" in finding.claim
-    assert finding.confidence.level == "high"
+    # "medium", not "high": the measurement is exact, but it was taken
+    # from one point, and a corridor could still clip an edge that
+    # measurement never sees. See the boundary tests below.
+    assert finding.confidence.level == "medium"
+    assert "rather than the parcel boundary" in finding.confidence.reason
 
 
 def test_a_measurement_contradicting_the_screenshot_says_so() -> None:
@@ -237,3 +241,84 @@ def test_the_full_assessment_is_carried_on_the_report() -> None:
 def test_without_coordinates_the_report_carries_no_assessment() -> None:
     report = ZoningAgent().report(PARCEL, [(Path("map.png"), KudaMasterPlanExtract())])
     assert report.road_assessment is None
+
+
+# --- boundary-measured findings -----------------------------------------
+
+
+def square_boundary(size_m: float = 80.0) -> list[LatLon]:
+    """A square parcel centred on the fixture's test point."""
+    dlat = size_m / 111194.9266
+    dlon = size_m / 106336.2372
+    return [
+        LatLon(lat=17.0 - dlat, lon=79.0 - dlon, source="surveyed"),
+        LatLon(lat=17.0 - dlat, lon=79.0 + dlon, source="surveyed"),
+        LatLon(lat=17.0 + dlat, lon=79.0 + dlon, source="surveyed"),
+        LatLon(lat=17.0 + dlat, lon=79.0 - dlon, source="surveyed"),
+    ]
+
+
+def _boundary_report(size_m: float = 80.0):
+    network = RoadNetwork.from_json(NETWORK)
+    return ZoningAgent().report(
+        PARCEL,
+        [(Path("map.png"), KudaMasterPlanExtract())],
+        road_assessment=network.assess(boundary=square_boundary(size_m)),
+    )
+
+
+def test_a_boundary_measurement_says_so_and_cites_the_vertex_count() -> None:
+    finding = _road_finding(_boundary_report())
+    assert "measured from the parcel boundary, 4 vertices" in finding.claim
+    # The point-only caveat must NOT appear: it would be false here.
+    assert "rather than the parcel boundary" not in finding.confidence.reason
+
+
+def test_a_centreline_crossing_the_parcel_is_described_as_such() -> None:
+    """Worse than clipping an edge, and the claim must distinguish them.
+
+    The 60 M road runs through an 80 m square, so the full 60 m corridor
+    crosses the land rather than merely reaching over a boundary.
+    """
+    finding = _road_finding(_boundary_report())
+    assert finding.status == "issue_found"
+    assert "passes through the parcel" in finding.claim
+    assert "full 60 m corridor" in finding.claim
+
+
+def test_an_edge_encroachment_is_quantified_separately() -> None:
+    """The 45 M road reaches 2.5 m over the eastern edge, not through it."""
+    finding = _road_finding(_boundary_report())
+    assert "45 M (centreline 20.0 m away, corridor reaches 2.5 m into the parcel)" in finding.claim
+
+
+def test_a_boundary_clear_result_earns_high_confidence() -> None:
+    """A small parcel well clear of everything.
+
+    Measured from real edges there is no unseen corner, so this is the
+    one case the system is entitled to call high confidence.
+    """
+    network = RoadNetwork.from_json(NETWORK)
+    # A 5 m square 200 m north of centre: the 60 M road is then ~180 m
+    # away and nothing reaches it.
+    dlat = 5 / 111194.9266
+    dlon = 5 / 106336.2372
+    north = 17.0 + 200 / 111194.9266
+    boundary = [
+        LatLon(lat=north - dlat, lon=79.0 - dlon, source="surveyed"),
+        LatLon(lat=north - dlat, lon=79.0 + dlon, source="surveyed"),
+        LatLon(lat=north + dlat, lon=79.0 + dlon, source="surveyed"),
+        LatLon(lat=north + dlat, lon=79.0 - dlon, source="surveyed"),
+    ]
+    report = ZoningAgent().report(
+        PARCEL,
+        [(Path("map.png"), KudaMasterPlanExtract())],
+        road_assessment=network.assess(boundary=boundary),
+    )
+    finding = _road_finding(report)
+    assert finding.status == "verified_ok"
+    assert finding.confidence.level == "high"
+
+
+def test_the_unmodelled_setback_caveat_survives_boundary_mode() -> None:
+    assert "not modelled" in _road_finding(_boundary_report()).confidence.reason

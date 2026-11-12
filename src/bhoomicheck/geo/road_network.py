@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import math
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -95,6 +96,72 @@ def _point_to_segment_m(
     t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)
     t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
     return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+
+
+def _range_gap(a_low: float, a_high: float, b_low: float, b_high: float) -> float:
+    """Separation between two intervals; 0 when they overlap."""
+    if a_high < b_low:
+        return b_low - a_high
+    if b_high < a_low:
+        return a_low - b_high
+    return 0.0
+
+
+def _orientation(ax: float, ay: float, bx: float, by: float, cx: float, cy: float) -> float:
+    """Cross product sign: >0 if C is left of AB, <0 if right, 0 if collinear."""
+    return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+
+
+def _segments_intersect(
+    ax: float, ay: float, bx: float, by: float,
+    cx: float, cy: float, dx: float, dy: float,
+) -> bool:
+    """Whether segments AB and CD cross.
+
+    Needed because a road centreline that passes *through* a parcel is
+    at distance zero from it, and no endpoint-to-segment measurement
+    would ever discover that -- the four endpoint distances can all be
+    large while the lines cross in the middle.
+    """
+    d1 = _orientation(cx, cy, dx, dy, ax, ay)
+    d2 = _orientation(cx, cy, dx, dy, bx, by)
+    d3 = _orientation(ax, ay, bx, by, cx, cy)
+    d4 = _orientation(ax, ay, bx, by, dx, dy)
+    if ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0)):
+        return True
+    # Collinear touching cases. Treated as intersecting: a centreline
+    # running along a parcel's edge does reach it.
+    def on_segment(px, py, qx, qy, rx, ry) -> bool:
+        return (
+            min(px, qx) <= rx <= max(px, qx)
+            and min(py, qy) <= ry <= max(py, qy)
+        )
+    if d1 == 0 and on_segment(cx, cy, dx, dy, ax, ay):
+        return True
+    if d2 == 0 and on_segment(cx, cy, dx, dy, bx, by):
+        return True
+    if d3 == 0 and on_segment(ax, ay, bx, by, cx, cy):
+        return True
+    if d4 == 0 and on_segment(ax, ay, bx, by, dx, dy):
+        return True
+    return False
+
+
+def _segment_to_segment_m(
+    ax: float, ay: float, bx: float, by: float,
+    cx: float, cy: float, dx: float, dy: float,
+) -> float:
+    """Shortest distance between two line segments, in metres."""
+    if _segments_intersect(ax, ay, bx, by, cx, cy, dx, dy):
+        return 0.0
+    # Not crossing: the closest approach is from some endpoint to the
+    # other segment, so four point-to-segment measurements suffice.
+    return min(
+        _point_to_segment_m(ax, ay, cx, cy, dx, dy),
+        _point_to_segment_m(bx, by, cx, cy, dx, dy),
+        _point_to_segment_m(cx, cy, ax, ay, bx, by),
+        _point_to_segment_m(dx, dy, ax, ay, bx, by),
+    )
 
 
 class RoadNetwork:
@@ -164,27 +231,151 @@ class RoadNetwork:
 
     def assess(
         self,
-        location: LatLon,
+        location: LatLon | None = None,
         coverage_radius_m: float = _DEFAULT_COVERAGE_RADIUS_M,
+        boundary: Sequence[LatLon] | None = None,
     ) -> RoadNetworkAssessment:
-        """Measure one parcel location against every proposed road.
+        """Measure one parcel against every proposed road.
 
         Returns the nearest approach per width class, nearest first.
 
         Args:
-            location: Where the parcel is.
+            location: A single parcel coordinate. Simpler to obtain (a
+                GIS cursor readout gives one), but it measures from a
+                point: a corridor can clip a parcel's corner while
+                being comfortably far from its centre, so a point-based
+                result can understate the risk.
             coverage_radius_m: How far the nearest road may be before we
                 conclude the parcel is outside this network's coverage
                 rather than comfortably clear of its roads.
+            boundary: The parcel's boundary as an ordered ring of at
+                least three vertices. Preferred when available: distance
+                is then measured from the parcel's actual edges, which
+                is the question a setback asks. The ring is closed
+                automatically -- do not repeat the first vertex.
+
+        Exactly one of `location` or `boundary` is required.
         """
-        # Local equirectangular projection centred on the parcel: x east,
-        # y north, both metres. Centring on the query point keeps the
-        # distortion smallest exactly where the measurement happens, and
-        # puts the parcel at the origin so the distance maths drops a
-        # subtraction.
-        lon_scale = math.cos(math.radians(location.lat)) * _EARTH_RADIUS_M
-        lat_scale = _EARTH_RADIUS_M
+        if boundary is not None and len(boundary) >= 3:
+            return self._assess_boundary(list(boundary), coverage_radius_m)
+        if boundary is not None:
+            raise RoadNetworkError(
+                f"a parcel boundary needs at least 3 vertices, got {len(boundary)}"
+            )
+        if location is None:
+            raise RoadNetworkError("assess() needs either a location or a boundary")
+        return self._assess_point(location, coverage_radius_m)
+
+    def _projection(self, lat: float):
+        """Local equirectangular projection: x east, y north, both metres.
+
+        Centred on the parcel so distortion is smallest exactly where the
+        measurement happens.
+        """
+        lon_scale = math.cos(math.radians(lat)) * _EARTH_RADIUS_M
+        return lon_scale, _EARTH_RADIUS_M
+
+    def _assess_point(
+        self, location: LatLon, coverage_radius_m: float
+    ) -> RoadNetworkAssessment:
+        lon_scale, lat_scale = self._projection(location.lat)
         deg = math.radians
+
+        def measure(seg: _Segment) -> float:
+            xs = [deg(lon - location.lon) * lon_scale for lon, _ in seg.points]
+            ys = [deg(lat - location.lat) * lat_scale for _, lat in seg.points]
+            return min(
+                _point_to_segment_m(0.0, 0.0, xs[i], ys[i], xs[i + 1], ys[i + 1])
+                for i in range(len(xs) - 1)
+            )
+
+        best, counts = self._nearest_per_width(
+            measure,
+            query_bounds=(location.lon, location.lon, location.lat, location.lat),
+            origin=(location.lon, location.lat),
+            scales=(lon_scale, lat_scale),
+        )
+        return self._build_assessment(
+            location=location,
+            boundary=[],
+            best=best,
+            counts=counts,
+            coverage_radius_m=coverage_radius_m,
+            inside_test=(location.lat, location.lon),
+        )
+
+    def _assess_boundary(
+        self, boundary: list[LatLon], coverage_radius_m: float
+    ) -> RoadNetworkAssessment:
+        # Centroid of the vertices, used as the projection origin and as
+        # the representative point the report quotes. Not an
+        # area-weighted centroid: this only has to sit inside the parcel
+        # to keep projection error negligible, and for a survey parcel
+        # the vertex mean does.
+        centre_lat = sum(p.lat for p in boundary) / len(boundary)
+        centre_lon = sum(p.lon for p in boundary) / len(boundary)
+        lon_scale, lat_scale = self._projection(centre_lat)
+        deg = math.radians
+
+        def to_xy(lon: float, lat: float) -> tuple[float, float]:
+            return (deg(lon - centre_lon) * lon_scale, deg(lat - centre_lat) * lat_scale)
+
+        ring = [to_xy(p.lon, p.lat) for p in boundary]
+        # Close the ring: the final edge from last vertex back to first is
+        # a real parcel edge and a road can encroach across it.
+        edges = list(zip(ring, ring[1:] + ring[:1]))
+
+        def measure(seg: _Segment) -> float:
+            pts = [to_xy(lon, lat) for lon, lat in seg.points]
+            nearest = math.inf
+            for i in range(len(pts) - 1):
+                (rx1, ry1), (rx2, ry2) = pts[i], pts[i + 1]
+                for (ex1, ey1), (ex2, ey2) in edges:
+                    d = _segment_to_segment_m(ex1, ey1, ex2, ey2, rx1, ry1, rx2, ry2)
+                    if d < nearest:
+                        nearest = d
+                        if nearest == 0.0:
+                            return 0.0  # crosses the boundary; cannot do better
+            return nearest
+
+        best, counts = self._nearest_per_width(
+            measure,
+            query_bounds=(
+                min(p.lon for p in boundary),
+                max(p.lon for p in boundary),
+                min(p.lat for p in boundary),
+                max(p.lat for p in boundary),
+            ),
+            origin=(centre_lon, centre_lat),
+            scales=(lon_scale, lat_scale),
+        )
+        return self._build_assessment(
+            location=LatLon(
+                lat=centre_lat, lon=centre_lon, source=boundary[0].source
+            ),
+            boundary=boundary,
+            best=best,
+            counts=counts,
+            coverage_radius_m=coverage_radius_m,
+            inside_test=(centre_lat, centre_lon),
+        )
+
+    def _nearest_per_width(
+        self,
+        measure,
+        query_bounds: tuple[float, float, float, float],
+        origin: tuple[float, float],
+        scales: tuple[float, float],
+    ) -> tuple[dict[float, float], dict[float, int]]:
+        """Nearest distance and segment count per width class.
+
+        Shared by point and boundary modes: only `measure` differs, which
+        keeps the bounding-box prefilter and the per-class bookkeeping in
+        one place rather than duplicated and able to drift apart.
+        """
+        q_min_lon, q_max_lon, q_min_lat, q_max_lat = query_bounds
+        lon_scale, lat_scale = scales
+        one_degree = math.radians(1.0)
 
         best: dict[float, float] = {}
         counts: dict[float, int] = {}
@@ -193,31 +384,38 @@ class RoadNetwork:
             counts[seg.width_m] = counts.get(seg.width_m, 0) + 1
             current = best.get(seg.width_m)
 
-            # Cheap rejection before doing real work: how close could
-            # this segment possibly be, judging only by its bounding box?
-            # If even that lower bound is worse than what we already have
-            # for this width class, skip the vertices entirely.
+            # Cheap rejection: the closest this segment could possibly be,
+            # judging only by bounding boxes. If even that lower bound is
+            # worse than what we have for this width class, skip it.
             if current is not None:
-                gap_x = max(
-                    0.0,
-                    self._axis_gap(location.lon, seg.min_lon, seg.max_lon),
-                ) * abs(deg(1.0)) * lon_scale
-                gap_y = max(
-                    0.0,
-                    self._axis_gap(location.lat, seg.min_lat, seg.max_lat),
-                ) * abs(deg(1.0)) * lat_scale
+                gap_x = (
+                    _range_gap(q_min_lon, q_max_lon, seg.min_lon, seg.max_lon)
+                    * one_degree
+                    * lon_scale
+                )
+                gap_y = (
+                    _range_gap(q_min_lat, q_max_lat, seg.min_lat, seg.max_lat)
+                    * one_degree
+                    * lat_scale
+                )
                 if math.hypot(gap_x, gap_y) >= current:
                     continue
 
-            xs = [(deg(lon - location.lon) * lon_scale) for lon, _ in seg.points]
-            ys = [(deg(lat - location.lat) * lat_scale) for _, lat in seg.points]
-            for i in range(len(xs) - 1):
-                d = _point_to_segment_m(0.0, 0.0, xs[i], ys[i], xs[i + 1], ys[i + 1])
-                if current is None or d < current:
-                    current = d
-            if current is not None:
-                best[seg.width_m] = current
+            d = measure(seg)
+            if current is None or d < current:
+                best[seg.width_m] = d
 
+        return best, counts
+
+    def _build_assessment(
+        self,
+        location: LatLon,
+        boundary: list[LatLon],
+        best: dict[float, float],
+        counts: dict[float, int],
+        coverage_radius_m: float,
+        inside_test: tuple[float, float],
+    ) -> RoadNetworkAssessment:
         roads = sorted(
             (
                 RoadProximity(
@@ -232,9 +430,9 @@ class RoadNetwork:
         )
 
         nearest_m = roads[0].distance_m if roads else math.inf
+        lat, lon = inside_test
         in_bbox = (
-            self.min_lat <= location.lat <= self.max_lat
-            and self.min_lon <= location.lon <= self.max_lon
+            self.min_lat <= lat <= self.max_lat and self.min_lon <= lon <= self.max_lon
         )
         # Both tests, because each catches a case the other misses: the
         # bounding box rejects a parcel in another district outright,
@@ -244,19 +442,11 @@ class RoadNetwork:
 
         return RoadNetworkAssessment(
             location=location,
+            boundary=boundary,
             network_label=self.label,
             within_mapped_area=within,
             roads=roads,
         )
-
-    @staticmethod
-    def _axis_gap(value: float, low: float, high: float) -> float:
-        """Degrees by which `value` falls outside [low, high]; 0 if inside."""
-        if value < low:
-            return low - value
-        if value > high:
-            return value - high
-        return 0.0
 
     @staticmethod
     def _label_for(width_m: float) -> str:

@@ -232,9 +232,28 @@ class ZoningAgent:
             fetched_at=fetched_at,
         )
 
-        where = (
-            f"parcel at {assessment.location.lat:.6f}, {assessment.location.lon:.6f}"
-        )
+        lat, lon = assessment.location.lat, assessment.location.lon
+        if assessment.measured_from_boundary:
+            where = (
+                f"measured from the parcel boundary, {len(assessment.boundary)} "
+                f"vertices, centroid {lat:.6f}, {lon:.6f}"
+            )
+            # A boundary measurement answers the question a setback
+            # actually asks, so it carries no extra caveat.
+            geometry_caveat = ""
+        else:
+            where = f"measured from a single point at {lat:.6f}, {lon:.6f}"
+            # Honest limitation, not boilerplate: a corridor can clip a
+            # parcel's corner while sitting comfortably clear of its
+            # centre. On the synthetic fixture, a road reported "clear by
+            # 77.5 m" from the centre was 2.5 m inside the parcel once
+            # its real edges were used. A point-based clearance must not
+            # be read as strongly as a boundary-based one.
+            geometry_caveat = (
+                "; measured from one point rather than the parcel boundary, so a "
+                "corridor clipping an edge or corner would not be detected -- "
+                "supply the parcel boundary for a conclusive answer"
+            )
 
         # A measured result that contradicts the screenshot reading is
         # worth surfacing: it is the clearest evidence of why this check
@@ -255,11 +274,23 @@ class ZoningAgent:
 
         if assessment.encroaching:
             worst = assessment.encroaching[0]
-            roads = ", ".join(
-                f"{r.road_label} (centreline {r.distance_m:.1f} m away, corridor "
-                f"reaches {r.encroachment_m:.1f} m into the parcel)"
-                for r in assessment.encroaching
-            )
+            descriptions = []
+            for r in assessment.encroaching:
+                if r.distance_m == 0.0:
+                    # Distance zero means the centreline itself touches or
+                    # crosses the parcel -- a band the full proposed width
+                    # runs through the land, which is materially worse
+                    # than a corridor reaching over one edge.
+                    descriptions.append(
+                        f"{r.road_label} (centreline passes through the parcel; "
+                        f"the full {r.proposed_width_m:.0f} m corridor crosses it)"
+                    )
+                else:
+                    descriptions.append(
+                        f"{r.road_label} (centreline {r.distance_m:.1f} m away, corridor "
+                        f"reaches {r.encroachment_m:.1f} m into the parcel)"
+                    )
+            roads = ", ".join(descriptions)
             return Finding(
                 check_id="zoning.road_widening_setback",
                 claim=(
@@ -272,8 +303,8 @@ class ZoningAgent:
                 provenance=provenance,
                 confidence=Confidence(
                     level="high",
-                    reason=f"computed from plan geometry{disagreement} -- "
-                    + SETBACK_RULES_CAVEAT,
+                    reason=f"computed from plan geometry{disagreement}"
+                    f"{geometry_caveat} -- " + SETBACK_RULES_CAVEAT,
                 ),
             )
 
@@ -303,8 +334,12 @@ class ZoningAgent:
             status="verified_ok",
             provenance=provenance,
             confidence=Confidence(
-                level="high",
-                reason=f"computed from plan geometry{disagreement} -- "
-                + SETBACK_RULES_CAVEAT,
+                # A point-based clearance is a weaker claim than a
+                # boundary-based one, so it does not get to call itself
+                # "high": the measurement is exact, but it answers a
+                # slightly different question than the one asked.
+                level="high" if assessment.measured_from_boundary else "medium",
+                reason=f"computed from plan geometry{disagreement}"
+                f"{geometry_caveat} -- " + SETBACK_RULES_CAVEAT,
             ),
         )
