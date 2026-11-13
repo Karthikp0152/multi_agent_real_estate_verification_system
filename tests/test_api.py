@@ -21,6 +21,7 @@ from bhoomicheck.orchestrator.graph import Orchestrator, sqlite_checkpointer
 from bhoomicheck.schemas.land_records import LandRecordExtract
 from bhoomicheck.schemas.litigation import LitigationSearchResult
 from bhoomicheck.schemas.owner_background import OwnerBackgroundExtract
+from bhoomicheck.schemas.prohibited import SUB_CLAUSES, ProhibitedListExtract
 from bhoomicheck.schemas.zoning import KudaMasterPlanExtract
 from tests.test_orchestrator import VALID_DOCUMENT_PAYLOAD, FakeAdapter, FakeProvider
 
@@ -33,6 +34,11 @@ def client(tmp_path: Path) -> TestClient:
         litigation_adapter=FakeAdapter(LitigationSearchResult(searched_name="K. Rajaiah")),
         land_records_adapter=FakeAdapter(LandRecordExtract(prohibited_status=False)),
         owner_background_adapter=FakeAdapter(OwnerBackgroundExtract(is_poa_sale=False)),
+        prohibited_property_adapter=FakeAdapter(
+            ProhibitedListExtract(
+                sub_clause=SUB_CLAUSES[0], land_category="Agriculture", entries=[]
+            )
+        ),
         checkpointer=sqlite_checkpointer(tmp_path / "checks.db"),
     )
     return TestClient(create_app(orchestrator=orchestrator, data_root=tmp_path))
@@ -61,7 +67,13 @@ def test_start_returns_pending_lookups_with_instructions(client: TestClient) -> 
     body = _start(client)
     assert body["complete"] is False
     agents = {p["agent"] for p in body["pending"]}
-    assert agents == {"zoning", "litigation", "land_records", "owner_background"}
+    assert agents == {
+        "zoning",
+        "litigation",
+        "land_records",
+        "owner_background",
+        "prohibited_property",
+    }
     # Instructions must come through -- they're what a human acts on.
     assert all(p["instructions"] for p in body["pending"])
 
@@ -71,7 +83,7 @@ def test_a_check_can_be_resumed_by_id(client: TestClient) -> None:
     # Simulating "come back days later": fetch state by id alone.
     body = client.get(f"/api/checks/{check_id}").json()
     assert body["complete"] is False
-    assert len(body["pending"]) == 4
+    assert len(body["pending"]) == 5
 
 
 def test_unknown_check_id_is_404(client: TestClient) -> None:
@@ -100,6 +112,7 @@ def test_full_run_through_uploads_produces_a_report(client: TestClient) -> None:
         "land_records",
         "owner_background",
         "growth_potential",
+        "prohibited_property",
     }
 
     html = client.get(f"/api/checks/{check_id}/report.html")
@@ -247,6 +260,11 @@ def test_supplied_coordinates_make_the_setback_check_measured(tmp_path: Path) ->
         litigation_adapter=FakeAdapter(LitigationSearchResult(searched_name="K. Rajaiah")),
         land_records_adapter=FakeAdapter(LandRecordExtract(prohibited_status=False)),
         owner_background_adapter=FakeAdapter(OwnerBackgroundExtract(is_poa_sale=False)),
+        prohibited_property_adapter=FakeAdapter(
+            ProhibitedListExtract(
+                sub_clause=SUB_CLAUSES[0], land_category="Agriculture", entries=[]
+            )
+        ),
         checkpointer=sqlite_checkpointer(tmp_path / "geo.db"),
     )
     client = TestClient(create_app(orchestrator=orchestrator, data_root=tmp_path))
@@ -287,6 +305,11 @@ def _geo_client(tmp_path: Path) -> TestClient:
         litigation_adapter=FakeAdapter(LitigationSearchResult(searched_name="K. Rajaiah")),
         land_records_adapter=FakeAdapter(LandRecordExtract(prohibited_status=False)),
         owner_background_adapter=FakeAdapter(OwnerBackgroundExtract(is_poa_sale=False)),
+        prohibited_property_adapter=FakeAdapter(
+            ProhibitedListExtract(
+                sub_clause=SUB_CLAUSES[0], land_category="Agriculture", entries=[]
+            )
+        ),
         checkpointer=sqlite_checkpointer(tmp_path / "geo.db"),
     )
     return TestClient(create_app(orchestrator=orchestrator, data_root=tmp_path))

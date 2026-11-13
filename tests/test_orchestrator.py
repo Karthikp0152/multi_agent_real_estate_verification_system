@@ -15,7 +15,11 @@ from bhoomicheck.agents.document_analysis import DocumentAnalysisAgent
 from bhoomicheck.orchestrator.graph import Orchestrator, PendingUpload, sqlite_checkpointer
 from bhoomicheck.schemas.land_records import LandRecordExtract
 from bhoomicheck.schemas.litigation import LitigationSearchQuery, LitigationSearchResult
-from bhoomicheck.schemas.owner_background import OwnerBackgroundExtract, OwnerBackgroundQuery
+from bhoomicheck.schemas.owner_background import (
+    OwnerBackgroundExtract,
+    OwnerBackgroundQuery,
+)
+from bhoomicheck.schemas.prohibited import SUB_CLAUSES, ProhibitedListExtract
 from bhoomicheck.schemas.parcel import ParcelIdentifier
 from bhoomicheck.schemas.risk_report import RiskReport
 from bhoomicheck.schemas.zoning import KudaMasterPlanExtract
@@ -85,6 +89,18 @@ class FakeAdapter:
         return self._result
 
 
+def clean_prohibited_lists() -> ProhibitedListExtract:
+    """A 22-A list naming no parcels: the parcel under test is absent.
+
+    Only one sub-clause, so the default fixture exercises the partial-
+    coverage path -- which is the realistic case and the one with the
+    honesty rule attached.
+    """
+    return ProhibitedListExtract(
+        sub_clause=SUB_CLAUSES[0], land_category="Agriculture", entries=[]
+    )
+
+
 def make_orchestrator(
     *,
     road_widening: bool = False,
@@ -107,10 +123,13 @@ def make_orchestrator(
         owner_background_adapter=FakeAdapter(
             OwnerBackgroundExtract(is_poa_sale=poa_sale), "fetch igrs"
         ),
+        prohibited_property_adapter=FakeAdapter(
+            clean_prohibited_lists(), "fetch 22-A lists"
+        ),
     )
 
 
-def test_start_pauses_on_four_manual_agents() -> None:
+def test_start_pauses_on_every_manual_agent() -> None:
     orchestrator = make_orchestrator()
     pending = orchestrator.start(
         thread_id="t1",
@@ -124,7 +143,13 @@ def test_start_pauses_on_four_manual_agents() -> None:
     agents_waiting = {p.agent for p in pending}
     # document_analysis needs no interrupt (PDFs supplied up front);
     # growth_potential hasn't started yet (waits on zoning).
-    assert agents_waiting == {"zoning", "litigation", "land_records", "owner_background"}
+    assert agents_waiting == {
+        "zoning",
+        "litigation",
+        "land_records",
+        "owner_background",
+        "prohibited_property",
+    }
     assert all(isinstance(p, PendingUpload) for p in pending)
 
 
@@ -159,10 +184,15 @@ def test_resolving_zoning_triggers_growth_potential_automatically() -> None:
     # growth_potential/zoning are no longer in the pending list.
     assert isinstance(result, list)
     agents_still_waiting = {p.agent for p in result}
-    assert agents_still_waiting == {"litigation", "land_records", "owner_background"}
+    assert agents_still_waiting == {
+        "litigation",
+        "land_records",
+        "owner_background",
+        "prohibited_property",
+    }
 
 
-def test_resolving_all_four_produces_the_final_risk_report() -> None:
+def test_resolving_every_lookup_produces_the_final_risk_report() -> None:
     orchestrator = make_orchestrator()
     pending = orchestrator.start(
         thread_id="t4",
@@ -178,6 +208,7 @@ def test_resolving_all_four_produces_the_final_risk_report() -> None:
         "litigation": Path("ecourts.png"),
         "land_records": Path("bhubharati.png"),
         "owner_background": Path("igrs.png"),
+        "prohibited_property": Path("22a_list.pdf"),
     }
     # Resolve one at a time, in an arbitrary order, to also pin down that
     # partial resume across separate calls works.
@@ -189,7 +220,7 @@ def test_resolving_all_four_produces_the_final_risk_report() -> None:
 
     assert isinstance(result, RiskReport)
     assert result.parcel == PARCEL
-    assert len(result.specialist_reports) == 6
+    assert len(result.specialist_reports) == 7
     agent_names = {r.agent_name for r in result.specialist_reports}
     assert agent_names == {
         "document_analysis",
@@ -198,6 +229,7 @@ def test_resolving_all_four_produces_the_final_risk_report() -> None:
         "land_records",
         "owner_background",
         "growth_potential",
+        "prohibited_property",
     }
 
 
@@ -215,6 +247,7 @@ def test_final_score_reflects_an_issue_from_one_specialist() -> None:
         "litigation": Path("ecourts.png"),
         "land_records": Path("bhubharati.png"),
         "owner_background": Path("igrs.png"),
+        "prohibited_property": Path("22a_list.pdf"),
     }
     result: list[PendingUpload] | RiskReport = pending
     for pending_upload in list(pending):
@@ -245,6 +278,7 @@ class TestPersistence:
             ),
             land_records_adapter=FakeAdapter(LandRecordExtract(prohibited_status=False)),
             owner_background_adapter=FakeAdapter(OwnerBackgroundExtract(is_poa_sale=False)),
+            prohibited_property_adapter=FakeAdapter(clean_prohibited_lists()),
             checkpointer=sqlite_checkpointer(db_path),
         )
 
@@ -273,6 +307,7 @@ class TestPersistence:
             "litigation",
             "land_records",
             "owner_background",
+            "prohibited_property",
         }
 
     def test_resumed_check_runs_to_a_final_report(self, tmp_path: Path) -> None:
@@ -297,6 +332,7 @@ class TestPersistence:
             "land_records",
             "owner_background",
             "growth_potential",
+            "prohibited_property",
         }
         # And the finished report is retrievable by id alone afterwards.
         assert second.final_report("check-2") is not None
@@ -328,6 +364,7 @@ def _resolve_everything(orchestrator: Orchestrator, thread_id: str, pending: lis
         "litigation": Path("ecourts.png"),
         "land_records": Path("bhubharati.png"),
         "owner_background": Path("igrs.png"),
+        "prohibited_property": Path("22a_list.pdf"),
     }
     result: list[PendingUpload] | RiskReport = pending
     for item in list(pending):
@@ -413,6 +450,7 @@ def test_a_measured_setback_survives_a_sqlite_checkpoint(tmp_path: Path) -> None
             ),
             land_records_adapter=FakeAdapter(LandRecordExtract(prohibited_status=False)),
             owner_background_adapter=FakeAdapter(OwnerBackgroundExtract(is_poa_sale=False)),
+            prohibited_property_adapter=FakeAdapter(clean_prohibited_lists()),
             checkpointer=sqlite_checkpointer(db),
         )
 
@@ -468,6 +506,7 @@ def test_a_boundary_survives_a_sqlite_checkpoint(tmp_path: Path) -> None:
             ),
             land_records_adapter=FakeAdapter(LandRecordExtract(prohibited_status=False)),
             owner_background_adapter=FakeAdapter(OwnerBackgroundExtract(is_poa_sale=False)),
+            prohibited_property_adapter=FakeAdapter(clean_prohibited_lists()),
             checkpointer=sqlite_checkpointer(db),
         )
 
