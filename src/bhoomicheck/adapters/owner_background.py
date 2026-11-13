@@ -145,10 +145,18 @@ class OwnerBackgroundAdapter(ManualAdapter[OwnerBackgroundQuery, OwnerBackground
             "\n"
             f"1. GPA Search. {poa_step}\n"
             "\n"
-            '2. "Prohibited Property". Check whether this property appears '
-            "in the Section 22-A prohibited register. Bhu Bharati's land "
-            "details page does not carry this, so this is the lookup that "
-            "answers it.\n"
+            '2. "Prohibited Property" (no login needed -- '
+            "registration.telangana.gov.in/openProhibitedProperties.htm). "
+            "Select district, mandal and village, then Fetch.\n"
+            "   The result is NOT a yes/no for your survey number: it is a "
+            "set of PDF lists for the whole village, in two columns "
+            "(Agriculture and Non-Agriculture), one PDF per 22-A "
+            "sub-clause -- (a), (b), (c)-Waqf, (c)-Endowment, (d), (e), and "
+            '"Court cases & Others".\n'
+            "   Download the PDFs for the column matching this parcel's "
+            "land type, and upload them. Note which ones you took: a "
+            "survey number absent from three of seven lists has not been "
+            "cleared, and this check is only as good as its coverage.\n"
             "\n"
             '3. "Encumbrance Search(EC)". NOTE: the "By Property" option is '
             "currently broken -- selecting it leaves the Document Number "
