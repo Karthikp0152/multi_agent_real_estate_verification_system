@@ -150,7 +150,8 @@ function render(state) {
     <div class="lookup">
       <h3>${p.agent.replace(/_/g, ' ')}</h3>
       <pre>${escapeHtml(p.instructions)}</pre>
-      <input type="file" accept=".png,.jpg,.jpeg,.webp,.pdf" id="f-${p.interrupt_id}">
+      <input type="file" multiple accept=".png,.jpg,.jpeg,.webp,.pdf" id="f-${p.interrupt_id}">
+      <div class="muted">You can select several files &mdash; one lookup often spans more than one page.</div>
       <div style="margin-top:10px">
         <button type="button" onclick="upload('${p.interrupt_id}')" id="b-${p.interrupt_id}">Upload</button>
       </div>
@@ -166,11 +167,13 @@ function escapeHtml(s) {
 async function upload(interruptId) {
   const input = $('f-' + interruptId);
   const btn = $('b-' + interruptId);
-  if (!input.files.length) { banner('Choose a file first.', true); return; }
+  if (!input.files.length) { banner('Choose at least one file first.', true); return; }
   btn.disabled = true;
   btn.innerHTML = '<span class="spin"></span>Reading it (~20s)';
   const fd = new FormData();
-  fd.append('file', input.files[0]);
+  // 'files' (plural) is the endpoint's multi-file field; one lookup can
+  // span several result pages, e.g. the four IGRS dashboard services.
+  for (const f of input.files) fd.append('files', f);
   try {
     const r = await fetch(`/api/checks/${checkId}/uploads/${interruptId}`, {method:'POST', body:fd});
     const body = await r.json();
