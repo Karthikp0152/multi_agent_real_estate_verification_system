@@ -145,6 +145,13 @@ class ProhibitedPropertyAgent:
                         f"held by {entry.owner_name}" if entry.owner_name else "",
                         f"extent {entry.extent}" if entry.extent else "",
                         f"under {entry.act}" if entry.act else "",
+                        f"reason {entry.reason}" if entry.reason else "",
+                        # The instrument behind the prohibition -- a C.C.
+                        # number, G.O. or memo. Without it the reader has
+                        # a verdict but nothing to take to an advocate.
+                        f"ref {entry.order_reference}"
+                        if entry.order_reference
+                        else "",
                     )
                     if part
                 )

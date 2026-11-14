@@ -16,6 +16,7 @@ from bhoomicheck.agents.prohibited_property import (
     match_against_lists,
 )
 from bhoomicheck.schemas.parcel import ParcelIdentifier
+from bhoomicheck.survey import related
 from bhoomicheck.schemas.prohibited import (
     SUB_CLAUSES,
     ProhibitedListEntry,
@@ -326,3 +327,85 @@ class TestChennaramAsItStandsToday:
         )
         assert finding.status == "not_verified"
         assert "only partly checked" in finding.claim
+
+
+class TestTheOtherProformas:
+    """Real extraction results from the other Chennaram registers.
+
+    The seven sub-clauses do not share a proforma: (a) is FORM-I,
+    (b) FORM-II, (d) FORM-V, (e) FORM-VI, and the court-cases register
+    is a live HTML table. Column sets differ accordingly, so these pin
+    what was actually read from each rather than assuming one shape.
+    """
+
+    def test_a_nil_register_is_empty_not_unreadable(self) -> None:
+        """FORM-II for Chennaram carries a single row reading "Nil".
+
+        Emitting that as an entry with a null survey number would look
+        like a line the system failed to read, when the government is
+        stating there is nothing to read. The difference decides whether
+        the register counts as searched.
+        """
+        form_ii = ProhibitedListExtract(
+            sub_clause="22 A (1) (b)", availability="empty", entries=[]
+        )
+        result = match_against_lists(PARCEL, [form_ii])
+        assert result.sub_clauses_checked == ["22 A (1) (b)"]
+        assert result.rows_examined == 0
+        assert result.matches == []
+
+    def test_the_surplus_land_register_rows_are_read_with_their_case_numbers(
+        self,
+    ) -> None:
+        """FORM-V (d) records surplus-land ceiling cases, not assignments.
+
+        Its legal basis column is "Act under which declared surplus"
+        (COAH here) and it carries a C.C. No. instead of an owner name,
+        so the entry shape genuinely differs from FORM-I's.
+        """
+        form_v = ProhibitedListExtract(
+            sub_clause="22 A (1) (d)",
+            availability="published",
+            entries=[
+                ProhibitedListEntry(
+                    survey_no=s, extent=e, act="COAH", order_reference=c
+                )
+                for s, e, c in [
+                    ("72/B/1/1/1", "0.03", "296/Wgl, 290/Wgl"),
+                    ("72/D/11", "0.23", "296/Wgl, 290/Wgl"),
+                    ("72/B/1/1/2", "0.20", "296/Wgl, 290/Wgl"),
+                    ("261", "1.29", "3044/Wgl/75"),
+                ]
+            ],
+        )
+        result = match_against_lists(PARCEL, [form_v])
+        assert result.rows_examined == 4
+        # 72/... and 261 are unrelated to 16/D.
+        assert result.matches == []
+
+    def test_a_parcel_in_the_surplus_register_is_caught(self) -> None:
+        """The same rows, for a buyer whose parcel IS one of them."""
+        listed = ParcelIdentifier(
+            survey_no="72/B/1/1/2", village="Chennaram",
+            mandal="Wardhannapet", district="Warangal",
+        )
+        form_v = ProhibitedListExtract(
+            sub_clause="22 A (1) (d)",
+            availability="published",
+            entries=[
+                ProhibitedListEntry(
+                    survey_no="72/B/1/1/2", extent="0.20", act="COAH",
+                    order_reference="296/Wgl, 290/Wgl",
+                )
+            ],
+        )
+        report = ProhibitedPropertyAgent().report(listed, [(Path("d.pdf"), form_v)])
+        finding = next(f for f in report.findings if f.check_id == CHECK_ID)
+        assert finding.status == "issue_found"
+        assert "COAH" in finding.claim
+        assert "296/Wgl" in finding.claim
+
+    def test_a_whole_survey_entry_does_not_catch_an_unrelated_neighbour(self) -> None:
+        """72/D/11 must not be read as covering 72/D/1 or 72/B."""
+        assert not related("72/D/1", "72/D/11")
+        assert not related("72/B/1/1/1", "72/B/1/1/2")

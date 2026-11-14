@@ -48,8 +48,25 @@ This is a Section 22-A prohibition record from the Telangana
 Registration & Stamps Department. It comes in one of three shapes, and
 which one you are looking at matters more than anything else here:
 
-A. A FORM-I scan -- a scanned, often multi-page table listing every
-   prohibited property in one village. Set availability "published".
+A. A scanned proforma table listing prohibited properties in one
+   village. Set availability "published". The proforma differs by
+   sub-clause and the heading says which:
+     FORM-I   -> 22 A (1) (a)   columns incl. "Act under which prohibited"
+     FORM-II  -> 22 A (1) (b)   columns incl. "State Govt. / Central Govt."
+     FORM-V   -> 22 A (1) (d)   columns incl. "Act under which declared
+                                 surplus UL (C&R)/LR (COAH)" and "C.C. No."
+     FORM-VI  -> 22 A (1) (e)   columns incl. "Reasons to include in POB"
+   Read the sub-clause from the heading text ("under section 22-A(1)(d)
+   ..."), not from the form number alone. Some of these documents open
+   with a Government Order (G.O.Ms.No...) before the table -- the table
+   is what you transcribe, but note the G.O. number and date in
+   order_reference if the rows do not carry their own.
+
+   A TABLE WHOSE ONLY DATA ROW READS "Nil" OR "NIL" IS AN EMPTY
+   REGISTER. Set availability "empty" and return NO entries. Do not
+   emit a row with a null survey number: that would look like a line
+   this system failed to read, when in fact the government is stating
+   there is nothing to read.
 B. A live results table headed "Prohibited Properties (Court cases &
    Others)". Set availability "published" if it lists properties, or
    "empty" if it says "No property is found to be prohibited in this
@@ -96,9 +113,16 @@ Each row -> one entry:
 - sub_survey_no, revenue_survey_no, plot_no: the "Sub Sy No.",
   "Rev Sy No." / "Rev Sub Sy No." and "Plot No." columns, where the
   source has them. Leave null on a FORM-I scan that does not.
-- reason: the "Reason" column on the court-cases table.
-- order_reference: the "Letter/Memo/Order/Notification No." column and
-  its date, joined as printed.
+- act: whichever column states the legal basis -- "Act under which
+  prohibited" (FORM-I), "Act under which declared surplus UL
+  (C&R)/LR (COAH)" (FORM-V), or "State Govt. / Central Govt."
+  (FORM-II).
+- reason: the "Reason" column on the court-cases table, or "Reasons to
+  include in POB" on FORM-VI.
+- order_reference: whichever column identifies the instrument behind
+  the entry -- "Letter/Memo/Order/Notification No." and date on the
+  court-cases table, "C.C. No." on FORM-V, or the G.O. number and date
+  from a covering Government Order.
 - owner_name: column "Name of the Assignee / Allotee / Owner".
 - extent: column "Extent", exactly as printed (acres-guntas).
 - act: column "Act under which prohibited", e.g. "TG Assigned Lands
