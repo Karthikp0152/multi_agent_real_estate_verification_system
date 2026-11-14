@@ -135,6 +135,7 @@ def test_real_adapters_produce_a_complete_report(tmp_path: Path) -> None:
         "land_records",
         "owner_background",
         "growth_potential",
+        "prohibited_property",
     }
     assert 0 <= report.overall_score <= 100
 

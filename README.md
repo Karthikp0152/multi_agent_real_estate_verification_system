@@ -34,6 +34,7 @@ Six specialist agents, an orchestrator, and a risk/report agent:
 | Litigation | eCourts (district + high court) | possible name matches |
 | Owner Background | IGRS | POA sale, seller identity, **encumbrances** |
 | Growth Potential | KUDA master plan | growth corridor, nearby upgrades |
+| Prohibited Property | IGRS 22-A register | **Section 22-A prohibition** across seven sub-clause registers (assigned / Waqf / endowment / court-attached) |
 | Document Analysis | uploaded PDFs | deed chain, parties, extent mismatches |
 
 The orchestrator is a LangGraph state machine. The four portal-backed
@@ -111,7 +112,12 @@ was digitised in the right place.
 5. **Scoring rules in YAML**, auditable and testable.
 6. **Fail loudly.** Missing data is reported as "not verified", never
    silently treated as "no problem found". A parcel outside the mapped
-   area does not get reported as comfortably clear of roads.
+   area does not get reported as comfortably clear of roads, and a
+   survey number absent from three of the seven 22-A lists is reported
+   as partly checked, not as cleared. Where the department has not
+   published a register at all, the report says so and names the
+   department as the blocker, rather than implying the buyer was
+   careless or that the register was consulted.
 
 ## Guardrails
 
@@ -135,7 +141,8 @@ are different claims.
 |---|---|
 | Geometry engine | **Validated.** Hand-checkable synthetic fixture (point and boundary modes); real-world result reproduced from source data |
 | Bhu Bharati extraction | **Validated** against a real result page (13/15 fields, both nulls correct). Produced three schema corrections |
-| KUDA, eCourts, IGRS extraction | **Not validated.** `parse()` is implemented and field labels are best-effort; those adapters say so in their docstrings |
+| 22-A prohibition check | **Validated end to end** against the real Chennaram FORM-I list: all 372 rows transcribed from 15 page scans, totals matching the form's own footer. Survey-number matching has 25 tests of its own |
+| KUDA, eCourts, IGRS encumbrance extraction | **Not validated.** `parse()` is implemented and field labels are best-effort; those adapters say so in their docstrings |
 | Orchestration, scoring, reporting | 200 tests, including two-process SQLite resume |
 
 Unreadable fields become `null`, which becomes a `not_verified` finding

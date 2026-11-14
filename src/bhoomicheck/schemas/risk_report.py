@@ -19,6 +19,7 @@ from bhoomicheck.schemas.land_records import LandRecordsReport
 from bhoomicheck.schemas.litigation import LitigationReport
 from bhoomicheck.schemas.owner_background import OwnerBackgroundReport
 from bhoomicheck.schemas.parcel import ParcelIdentifier
+from bhoomicheck.schemas.prohibited import ProhibitedPropertyReport
 from bhoomicheck.schemas.scoring import ScoredFinding
 from bhoomicheck.schemas.zoning import ZoningReport
 
@@ -47,6 +48,7 @@ SpecialistReport = Annotated[
         LandRecordsReport,
         OwnerBackgroundReport,
         GrowthPotentialReport,
+        ProhibitedPropertyReport,
     ],
     Field(discriminator="agent_name"),
 ]

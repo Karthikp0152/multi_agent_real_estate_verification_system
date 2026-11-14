@@ -45,12 +45,14 @@ from bhoomicheck.adapters.kuda import KudaMasterPlanAdapter
 from bhoomicheck.adapters.land_records import LandRecordsAdapter
 from bhoomicheck.adapters.litigation import LitigationAdapter
 from bhoomicheck.adapters.owner_background import OwnerBackgroundAdapter
+from bhoomicheck.adapters.prohibited_property import ProhibitedPropertyAdapter
 from bhoomicheck.agents.document_analysis import DocumentAnalysisAgent
 from bhoomicheck.agents.growth_potential import GrowthPotentialAgent
 from bhoomicheck.agents.land_records import LandRecordsAgent
 from bhoomicheck.agents.litigation import LitigationAgent
 from bhoomicheck.agents.owner_background import OwnerBackgroundAgent
 from bhoomicheck.agents.risk_report import RiskReportAgent
+from bhoomicheck.agents.prohibited_property import ProhibitedPropertyAgent
 from bhoomicheck.agents.zoning import ZoningAgent
 from bhoomicheck.llm.provider import LLMProvider
 from bhoomicheck.schemas.document import DocumentAnalysisReport
@@ -61,6 +63,10 @@ from bhoomicheck.schemas.owner_background import OwnerBackgroundReport, OwnerBac
 from bhoomicheck.geo.road_network import RoadNetwork, load_default_network
 from bhoomicheck.schemas.geo import LatLon
 from bhoomicheck.schemas.parcel import ParcelIdentifier
+from bhoomicheck.schemas.prohibited import (
+    ProhibitedListExtract,
+    ProhibitedPropertyReport,
+)
 from bhoomicheck.schemas.risk_report import RiskReport
 from bhoomicheck.schemas.zoning import KudaMasterPlanExtract, ZoningReport
 
@@ -159,8 +165,8 @@ class OrchestratorState(TypedDict):
         owner_background_query: Who to search IGRS for.
         document_report / zoning_report / litigation_report /
             land_records_report / owner_background_report /
-            growth_potential_report: Filled in once that node completes;
-            None until then.
+            growth_potential_report / prohibited_property_report:
+            Filled in once that node completes; None until then.
         zoning_extracts: The (upload_path, extract) pairs zoning_node
             fetched -- growth_potential_node reads this instead of
             triggering its own interrupt (same screenshot, see
@@ -181,6 +187,7 @@ class OrchestratorState(TypedDict):
     land_records_report: LandRecordsReport | None
     owner_background_report: OwnerBackgroundReport | None
     growth_potential_report: GrowthPotentialReport | None
+    prohibited_property_report: ProhibitedPropertyReport | None
     zoning_extracts: list[tuple[Path, KudaMasterPlanExtract]] | None
     final_report: RiskReport | None
 
@@ -212,11 +219,13 @@ class Orchestrator:
         litigation_adapter: LitigationAdapter | None = None,
         land_records_adapter: LandRecordsAdapter | None = None,
         owner_background_adapter: OwnerBackgroundAdapter | None = None,
+        prohibited_property_adapter: ProhibitedPropertyAdapter | None = None,
         zoning_agent: ZoningAgent | None = None,
         litigation_agent: LitigationAgent | None = None,
         land_records_agent: LandRecordsAgent | None = None,
         owner_background_agent: OwnerBackgroundAgent | None = None,
         growth_potential_agent: GrowthPotentialAgent | None = None,
+        prohibited_property_agent: ProhibitedPropertyAgent | None = None,
         risk_report_agent: RiskReportAgent | None = None,
         checkpointer: BaseCheckpointSaver | None = None,
         road_network: RoadNetwork | None = None,
@@ -252,11 +261,17 @@ class Orchestrator:
         self.litigation_adapter = litigation_adapter or LitigationAdapter(provider)
         self.land_records_adapter = land_records_adapter or LandRecordsAdapter(provider)
         self.owner_background_adapter = owner_background_adapter or OwnerBackgroundAdapter(provider)
+        self.prohibited_property_adapter = (
+            prohibited_property_adapter or ProhibitedPropertyAdapter(provider)
+        )
         self.zoning_agent = zoning_agent or ZoningAgent()
         self.litigation_agent = litigation_agent or LitigationAgent()
         self.land_records_agent = land_records_agent or LandRecordsAgent()
         self.owner_background_agent = owner_background_agent or OwnerBackgroundAgent()
         self.growth_potential_agent = growth_potential_agent or GrowthPotentialAgent()
+        self.prohibited_property_agent = (
+            prohibited_property_agent or ProhibitedPropertyAgent()
+        )
         self.risk_report_agent = risk_report_agent or RiskReportAgent()
         # `or` is wrong here: it would re-resolve the default every time a
         # caller deliberately passed a network that happened to be falsy.
@@ -272,19 +287,21 @@ class Orchestrator:
         builder.add_node("litigation", self._litigation_node)
         builder.add_node("land_records", self._land_records_node)
         builder.add_node("owner_background", self._owner_background_node)
+        builder.add_node("prohibited_property", self._prohibited_property_node)
         builder.add_node("growth_potential", self._growth_potential_node)
         builder.add_node("risk_report", self._risk_report_node)
 
-        # Fan out: five nodes start together from START. growth_potential
+        # Fan out: six nodes start together from START. growth_potential
         # is not here -- it depends on zoning finishing first (reuses its
         # upload), so it's reached via an edge from zoning, not START.
         builder.add_edge(START, "document_analysis")
         builder.add_edge(START, "zoning")
+        builder.add_edge(START, "prohibited_property")
         builder.add_edge(START, "litigation")
         builder.add_edge(START, "land_records")
         builder.add_edge(START, "owner_background")
         builder.add_edge("zoning", "growth_potential")
-        # Fan in: risk_report has five inbound edges. zoning is not one
+        # Fan in: risk_report has six inbound edges. zoning is not one
         # of them directly -- a diamond (zoning -> risk_report AND
         # zoning -> growth_potential -> risk_report) let risk_report fire
         # as soon as the direct edge was satisfied, racing ahead of the
@@ -298,6 +315,7 @@ class Orchestrator:
         builder.add_edge("litigation", "risk_report")
         builder.add_edge("land_records", "risk_report")
         builder.add_edge("owner_background", "risk_report")
+        builder.add_edge("prohibited_property", "risk_report")
         builder.add_edge("growth_potential", "risk_report")
         builder.add_edge("risk_report", END)
         return builder.compile(checkpointer=checkpointer)
@@ -375,6 +393,17 @@ class Orchestrator:
         report = self.owner_background_agent.report(state["parcel"], extracts)
         return {"owner_background_report": report}
 
+    def _prohibited_property_node(self, state: OrchestratorState) -> dict:
+        instructions = self.prohibited_property_adapter.instructions(state["parcel"])
+        paths = self._resume_paths(
+            interrupt({"agent": "prohibited_property", "instructions": instructions})
+        )
+        extracts = [
+            (path, self.prohibited_property_adapter.parse(path)) for path in paths
+        ]
+        report = self.prohibited_property_agent.report(state["parcel"], extracts)
+        return {"prohibited_property_report": report}
+
     def _growth_potential_node(self, state: OrchestratorState) -> dict:
         report = self.growth_potential_agent.report(state["parcel"], state["zoning_extracts"])
         return {"growth_potential_report": report}
@@ -400,6 +429,7 @@ class Orchestrator:
                 state["land_records_report"],
                 state["owner_background_report"],
                 state["growth_potential_report"],
+                state["prohibited_property_report"],
             )
             if report is not None
         ]
@@ -445,6 +475,7 @@ class Orchestrator:
                 "land_records_report": None,
                 "owner_background_report": None,
                 "growth_potential_report": None,
+                "prohibited_property_report": None,
                 "zoning_extracts": None,
                 "final_report": None,
             },
