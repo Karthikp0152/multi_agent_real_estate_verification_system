@@ -135,7 +135,9 @@ was digitised in the right place.
 ## What is validated, and what is not
 
 Being specific about this, because "it runs" and "its output is true"
-are different claims.
+are different claims. [`docs/validation.md`](docs/validation.md) records
+each check in full: the sample used, the result, and what the validation
+changed.
 
 | | Status |
 |---|---|
