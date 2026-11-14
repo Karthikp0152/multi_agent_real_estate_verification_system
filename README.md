@@ -138,7 +138,7 @@ are different claims.
 |---|---|
 | Geometry engine | **Validated.** Hand-checkable synthetic fixture (point and boundary modes); real-world result reproduced from source data |
 | Bhu Bharati extraction | **Validated** against a real result page (13/15 fields, both nulls correct). Produced three schema corrections |
-| 22-A prohibition check | **Validated** against the real Chennaram FORM-I list (372 rows). Survey-number matching has 25 tests of its own |
+| 22-A prohibition check | **Validated end to end** against the real Chennaram FORM-I list: all 372 rows transcribed from 15 page scans, totals matching the form's own footer. Survey-number matching has 25 tests of its own |
 | KUDA, eCourts, IGRS encumbrance extraction | **Not validated.** `parse()` is implemented and field labels are best-effort; those adapters say so in their docstrings |
 | Orchestration, scoring, reporting | 200 tests, including two-process SQLite resume |
 

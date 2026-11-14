@@ -10,6 +10,8 @@ Usage:
     python scripts/verify_extraction.py land_records ~/Desktop/bhu.png
     python scripts/verify_extraction.py litigation ~/Desktop/ecourts.png
     python scripts/verify_extraction.py owner_background ~/Desktop/igrs.png
+    python scripts/verify_extraction.py prohibited ~/Desktop/22a.pdf \
+        --survey-no 16/D --village Chennaram --mandal Wardhannapet
 
 What to look for in the output:
 - EVERY FIELD NULL usually means the schema's field names don't match
@@ -39,10 +41,12 @@ from bhoomicheck.adapters.kuda import KudaMasterPlanAdapter
 from bhoomicheck.adapters.land_records import LandRecordsAdapter
 from bhoomicheck.adapters.litigation import LitigationAdapter
 from bhoomicheck.adapters.owner_background import OwnerBackgroundAdapter
+from bhoomicheck.adapters.prohibited_property import ProhibitedPropertyAdapter
 from bhoomicheck.agents.growth_potential import GrowthPotentialAgent
 from bhoomicheck.agents.land_records import LandRecordsAgent
 from bhoomicheck.agents.litigation import LitigationAgent
 from bhoomicheck.agents.owner_background import OwnerBackgroundAgent
+from bhoomicheck.agents.prohibited_property import ProhibitedPropertyAgent
 from bhoomicheck.agents.zoning import ZoningAgent
 from bhoomicheck.llm.gemini import GeminiProvider
 from bhoomicheck.schemas.parcel import ParcelIdentifier
@@ -52,6 +56,7 @@ SOURCES = {
     "land_records": (LandRecordsAdapter, [LandRecordsAgent]),
     "litigation": (LitigationAdapter, [LitigationAgent]),
     "owner_background": (OwnerBackgroundAdapter, [OwnerBackgroundAgent]),
+    "prohibited": (ProhibitedPropertyAdapter, [ProhibitedPropertyAgent]),
 }
 
 GREEN, YELLOW, RED, DIM, BOLD, OFF = (
@@ -74,6 +79,23 @@ def _show_record(record: BaseModel) -> int:
         marker = f"{DIM}null{OFF}" if empty else f"{GREEN}{value!r}{OFF}"
         print(f"  {name:28} {marker}")
     return nulls
+
+
+def _show_entry_sample(record: BaseModel) -> None:
+    """For list transcriptions, show how many rows came back and a sample.
+
+    A truncated transcription is the failure mode that matters here: a
+    model that reads 40 rows of a 372-row list and stops would report a
+    listed parcel as absent, so the count is the headline.
+    """
+    entries = getattr(record, "entries", None)
+    if entries is None:
+        return
+    print(f"\n{BOLD}Rows transcribed: {len(entries)}{OFF}")
+    for entry in entries[:5]:
+        print(f"  {DIM}{entry.survey_no!r:16} {entry.owner_name}{OFF}")
+    if len(entries) > 5:
+        print(f"  {DIM}... and {len(entries) - 5} more{OFF}")
 
 
 def _show_findings(agent_classes, parcel: ParcelIdentifier, upload: Path, record) -> None:
@@ -132,6 +154,7 @@ def main() -> int:
 
     total = len(record.model_dump())
     nulls = _show_record(record)
+    _show_entry_sample(record)
     print(f"\n{DIM}{total - nulls}/{total} fields populated in {elapsed:.1f}s{OFF}")
 
     if nulls == total:

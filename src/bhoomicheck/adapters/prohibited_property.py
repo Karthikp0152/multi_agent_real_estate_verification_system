@@ -20,6 +20,15 @@ be indistinguishable from the OCR having mangled it, and the tool would
 report a listed parcel as clean. That is the exact false-clean this
 project exists to prevent, so the scans are transcribed instead.
 
+VALIDATED AGAINST A REAL LIST. Run against the Chennaram 22A(1)(a)
+Agriculture list (15 scanned pages): 372 rows transcribed, matching the
+document's own final Sl.No., with total_extent reading "232.16" exactly
+as the form's footer prints it, and nothing flagged unreadable. Rows
+spot-checked across the range -- 8/1, 10/A/3, 49/53/B/2, 254/110/E,
+279A, 464 -- each appeared exactly once. Truncation is the failure mode
+that would matter most here (a model that stops at row 40 reports a
+listed parcel as absent), and it did not occur.
+
 The form's columns, confirmed against a real list rather than guessed:
 Sl.No | District | Mandal | Village/Town | Sy. No. & Sub-Division No. |
 Plot No | Town Survey No. | House No. | Name of the Assignee / Allotee /
