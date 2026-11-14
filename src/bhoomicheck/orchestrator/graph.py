@@ -29,11 +29,14 @@ document_analysis needs no interrupt: its PDFs are supplied up front
 interactively mid-run.
 """
 
+import sqlite3
 from pathlib import Path
 from typing import TypedDict
 
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 from pydantic import BaseModel
@@ -49,6 +52,7 @@ from bhoomicheck.agents.litigation import LitigationAgent
 from bhoomicheck.agents.owner_background import OwnerBackgroundAgent
 from bhoomicheck.agents.risk_report import RiskReportAgent
 from bhoomicheck.agents.zoning import ZoningAgent
+from bhoomicheck.llm.provider import LLMProvider
 from bhoomicheck.schemas.document import DocumentAnalysisReport
 from bhoomicheck.schemas.growth_potential import GrowthPotentialReport
 from bhoomicheck.schemas.land_records import LandRecordsReport
@@ -58,30 +62,72 @@ from bhoomicheck.schemas.parcel import ParcelIdentifier
 from bhoomicheck.schemas.risk_report import RiskReport
 from bhoomicheck.schemas.zoning import KudaMasterPlanExtract, ZoningReport
 
-# LangGraph's checkpoint serializer's default behavior (as of the
-# installed version) is to accept *any* type via a pickle-ish fallback,
-# but log a warning that this "will be blocked in a future version"
-# unless the type is explicitly allowed. Registering our own report
-# schemas here closes that gap now rather than waiting for an upgrade to
-# break checkpointing outright. Verified empirically (round-tripped a
-# LitigationReport through this exact serializer) that this silences the
-# warning and preserves equality after a dumps/loads round trip.
-_CHECKPOINT_ALLOWED_TYPES = [
-    DocumentAnalysisReport,
-    ZoningReport,
-    LitigationReport,
-    LandRecordsReport,
-    OwnerBackgroundReport,
-    GrowthPotentialReport,
-    RiskReport,
-]
+def _checkpoint_allowed_types() -> list[type[BaseModel]]:
+    """Every Pydantic model under bhoomicheck.schemas, for the checkpointer.
+
+    Derived by walking the package rather than hand-listed, and that is
+    the whole point. LangGraph's serializer treats an explicit allowlist
+    as a *block*list for everything else -- and a blocked type does not
+    raise, it silently comes back as a plain dict. A hand-written list
+    therefore fails in the nastiest possible way: add a schema, forget to
+    register it, and some agent downstream gets a dict instead of a model
+    and dies with an unrelated-looking AttributeError.
+
+    That is not hypothetical -- it is exactly what happened the first
+    time this ran against a real SQLite checkpointer: ParcelIdentifier,
+    the two query models, and KudaMasterPlanExtract were all missing from
+    a hand-written list, and growth_potential crashed on a dict. The
+    in-memory checkpointer never caught it because it does not round-trip
+    state through serialization at all.
+    """
+    import importlib
+    import pkgutil
+
+    from bhoomicheck import schemas
+
+    found: dict[str, type[BaseModel]] = {}
+    for module_info in pkgutil.iter_modules(schemas.__path__):
+        module = importlib.import_module(f"{schemas.__name__}.{module_info.name}")
+        for obj in vars(module).values():
+            if isinstance(obj, type) and issubclass(obj, BaseModel) and obj is not BaseModel:
+                # Keyed by module+name so a model imported into several
+                # schema modules is only registered once.
+                found[f"{obj.__module__}.{obj.__name__}"] = obj
+    return list(found.values())
+
+
+def _serializer() -> JsonPlusSerializer:
+    """The one serializer config both checkpointer flavors share."""
+    return JsonPlusSerializer(allowed_msgpack_modules=_checkpoint_allowed_types())
 
 
 def _default_checkpointer() -> InMemorySaver:
-    """InMemorySaver with our report types allowlisted for serialization."""
-    return InMemorySaver(
-        serde=JsonPlusSerializer(allowed_msgpack_modules=_CHECKPOINT_ALLOWED_TYPES)
-    )
+    """InMemorySaver with our report types allowlisted for serialization.
+
+    Fine for tests and one-shot runs; state dies with the process. For a
+    real check spread over days, use sqlite_checkpointer instead.
+    """
+    return InMemorySaver(serde=_serializer())
+
+
+def sqlite_checkpointer(db_path: Path) -> SqliteSaver:
+    """A checkpointer that survives the process exiting.
+
+    This is what makes the manual-adapter workflow actually work as
+    designed: a real check means fetching a KUDA screenshot today, a Bhu
+    Bharati one tomorrow, and sitting through eCourts captchas next week.
+    With InMemorySaver, closing the terminal loses the whole run. Backed
+    by a plain SQLite file, so there's no database server to run -- the
+    "deployment" is a file on disk.
+
+    check_same_thread=False is deliberate and safe here: LangGraph runs
+    our parallel specialist nodes on a thread pool, so the connection is
+    touched from more than one thread, and SqliteSaver's own docs state
+    it guards access with an internal lock.
+    """
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    return SqliteSaver(conn, serde=_serializer())
 
 
 class OrchestratorState(TypedDict):
@@ -146,6 +192,7 @@ class Orchestrator:
     def __init__(
         self,
         document_agent: DocumentAnalysisAgent,
+        provider: LLMProvider | None = None,
         kuda_adapter: KudaMasterPlanAdapter | None = None,
         litigation_adapter: LitigationAdapter | None = None,
         land_records_adapter: LandRecordsAdapter | None = None,
@@ -156,30 +203,33 @@ class Orchestrator:
         owner_background_agent: OwnerBackgroundAgent | None = None,
         growth_potential_agent: GrowthPotentialAgent | None = None,
         risk_report_agent: RiskReportAgent | None = None,
-        checkpointer: InMemorySaver | None = None,
+        checkpointer: BaseCheckpointSaver | None = None,
     ) -> None:
         """
         Args:
             document_agent: No default -- it needs an LLMProvider (a real
                 GeminiProvider, or a FakeProvider in tests), and guessing
                 which one silently would hide a real dependency.
+            provider: Model backend the default adapters use to read
+                uploaded screenshots. Only needed when those defaults are
+                used -- passing your own adapters (as the tests do) makes
+                it irrelevant.
             kuda_adapter, litigation_adapter, land_records_adapter,
-                owner_background_adapter: Default to the real adapters.
-                Real ones today means their parse() raises
-                NotImplementedError once resumed -- tests override with a
-                fake adapter that has a working parse(), same idea as
+                owner_background_adapter: Default to the real adapters,
+                built against `provider`. Tests override them with fake
+                adapters that have a scripted parse(), same idea as
                 document_agent's FakeProvider.
-            checkpointer: Defaults to InMemorySaver (with our report types
-                allowlisted for its serializer, see
-                _default_checkpointer) -- state doesn't survive a process
-                restart, which is fine for now (no deployment target
-                yet); overridable once one exists.
+            checkpointer: Defaults to InMemorySaver (see
+                _default_checkpointer), which is right for tests and
+                one-shot runs but dies with the process. Pass
+                sqlite_checkpointer(path) for a real check that spans
+                days -- that's what the CLI does.
         """
         self.document_agent = document_agent
-        self.kuda_adapter = kuda_adapter or KudaMasterPlanAdapter()
-        self.litigation_adapter = litigation_adapter or LitigationAdapter()
-        self.land_records_adapter = land_records_adapter or LandRecordsAdapter()
-        self.owner_background_adapter = owner_background_adapter or OwnerBackgroundAdapter()
+        self.kuda_adapter = kuda_adapter or KudaMasterPlanAdapter(provider)
+        self.litigation_adapter = litigation_adapter or LitigationAdapter(provider)
+        self.land_records_adapter = land_records_adapter or LandRecordsAdapter(provider)
+        self.owner_background_adapter = owner_background_adapter or OwnerBackgroundAdapter(provider)
         self.zoning_agent = zoning_agent or ZoningAgent()
         self.litigation_agent = litigation_agent or LitigationAgent()
         self.land_records_agent = land_records_agent or LandRecordsAgent()
@@ -188,7 +238,7 @@ class Orchestrator:
         self.risk_report_agent = risk_report_agent or RiskReportAgent()
         self._graph = self._build_graph(checkpointer or _default_checkpointer())
 
-    def _build_graph(self, checkpointer: InMemorySaver):
+    def _build_graph(self, checkpointer: BaseCheckpointSaver):
         builder = StateGraph(OrchestratorState)
         builder.add_node("document_analysis", self._document_analysis_node)
         builder.add_node("zoning", self._zoning_node)
@@ -334,6 +384,36 @@ class Orchestrator:
             Command(resume={interrupt_id: str(upload_path)}), config=config
         )
         return self._pending_or_final(result)
+
+    def pending_uploads(self, thread_id: str) -> list[PendingUpload]:
+        """What this run is still waiting on -- works after a restart too.
+
+        start() and provide_upload() already return this, but a check
+        that spans days outlives the process that began it: reopening a
+        thread tomorrow needs a way to ask what is still outstanding.
+
+        Filters on task.result being None, which is the part worth
+        knowing: get_state() keeps *completed* tasks in its list with
+        their interrupts still attached. A run that already resolved
+        zoning still shows a zoning interrupt there, so reading
+        task.interrupts alone would re-prompt for a file that was
+        already supplied. task.result is populated only once the node
+        actually finished, so it is the honest signal.
+        """
+        state = self._graph.get_state({"configurable": {"thread_id": thread_id}})
+        return [
+            PendingUpload(
+                agent=i.value["agent"], instructions=i.value["instructions"], interrupt_id=i.id
+            )
+            for task in state.tasks
+            if task.result is None
+            for i in task.interrupts
+        ]
+
+    def final_report(self, thread_id: str) -> RiskReport | None:
+        """The finished report for a thread, or None if it is still running."""
+        state = self._graph.get_state({"configurable": {"thread_id": thread_id}})
+        return state.values.get("final_report")
 
     def _pending_or_final(self, result: dict) -> list[PendingUpload] | RiskReport:
         pending = result.get("__interrupt__")

@@ -19,27 +19,71 @@ Query is keyed by a person's name (like litigation), not a parcel -- see
 adapters/base.py, which is why ManualAdapter is generic over the query
 type at all.
 
-STILL PROVISIONAL: `OwnerBackgroundExtract` (schemas/owner_background.py)
-is a best-effort guess at what's legible in an IGRS lookup result --
-nobody has supplied a real sample yet. `parse()` refuses to run until
-one exists.
+STILL UNVALIDATED AGAINST A REAL SAMPLE: parse() is implemented -- a
+vision model reads the upload into the schema below, and anything it
+cannot read stays null, which becomes a "not_verified" finding rather
+than a guess. What is NOT yet confirmed is whether these field names
+match what the real page actually shows. Until someone runs this against
+a genuine screenshot, treat the field set as a best-effort guess that
+may need correcting, not as verified.
 """
 
 from pathlib import Path
 
 from bhoomicheck.adapters.base import ManualAdapter
+from bhoomicheck.llm.extraction import extract_structured
+from bhoomicheck.llm.provider import LLMProvider
 from bhoomicheck.schemas.owner_background import OwnerBackgroundExtract, OwnerBackgroundQuery
+
+_PARSE_CONTEXT = """\
+This is a screenshot from IGRS Telangana (registration.telangana.gov.in),
+the Registration and Stamps department portal -- either an Encumbrance
+Search result showing a property's registered document chain, or a
+Certified Copy lookup of one registered document.
+
+Read off, where legible:
+- is_poa_sale: whether the transaction is being conducted through a Power
+  of Attorney / GPA rather than directly by the recorded titleholder
+- poa_registered: whether a Power of Attorney actually appears as a
+  REGISTERED document here. False means the portal was searched and the
+  POA was not found; null means the screenshot does not establish either
+  way. That distinction matters -- "not found" is a fraud signal,
+  "not shown" is not.
+- poa_document_no / poa_execution_date / poa_status: as printed
+- seller_name_matches_title: whether the seller's name matches the name
+  on the registered chain shown here
+
+- encumbrances_found / encumbrances: if this is an Encumbrance Search
+  result, list every registered mortgage or charge shown, copying the
+  document number, registration date, the nature of the entry in the
+  portal's own words, the party names, and any amount as printed. Set
+  discharged true only if the listing explicitly shows the charge as
+  discharged or released; null if it simply does not say. Set
+  encumbrances_found false only if the search clearly ran and returned
+  no entries -- null if the screenshot does not establish that.
+
+Leave anything the screenshot does not clearly establish as null. Do not
+reason about what is likely -- only report what is on screen."""
 
 
 class OwnerBackgroundAdapter(ManualAdapter[OwnerBackgroundQuery, OwnerBackgroundExtract]):
     """Manual-mode adapter: IGRS Telangana registered-document lookup.
 
     `instructions()` points at the real, confirmed portal. `parse()`
-    still needs a real result sample before it can be implemented -- it
-    fails loudly instead of guessing at layout nobody has seen.
+    reads the screenshot with a vision model; its field names have not
+    yet been validated against a real sample.
     """
 
     source_name = "IGRS Telangana (registration.telangana.gov.in)"
+
+    def __init__(self, provider: LLMProvider | None = None) -> None:
+        """
+        Args:
+            provider: Model backend used to read the screenshot. Optional
+                so instructions() works without one; parse() raises if it
+                was never supplied.
+        """
+        self.provider = provider
 
     def instructions(self, query: OwnerBackgroundQuery) -> str:
         poa_step = (
@@ -72,9 +116,13 @@ class OwnerBackgroundAdapter(ManualAdapter[OwnerBackgroundQuery, OwnerBackground
         )
 
     def parse(self, upload_path: Path) -> OwnerBackgroundExtract:
-        raise NotImplementedError(
-            "OwnerBackgroundAdapter.parse() has no real IGRS result sample "
-            "to learn its shape from yet -- provide a screenshot before "
-            "this can be implemented (fail loudly rather than guess at "
-            "parsing logic, per CLAUDE.md principle 6)."
+        if self.provider is None:
+            raise RuntimeError(
+                "OwnerBackgroundAdapter.parse() needs an LLMProvider; "
+                "construct it as OwnerBackgroundAdapter(provider)."
+            )
+        extract = extract_structured(
+            self.provider, upload_path, OwnerBackgroundExtract, _PARSE_CONTEXT
         )
+        assert isinstance(extract, OwnerBackgroundExtract)
+        return extract

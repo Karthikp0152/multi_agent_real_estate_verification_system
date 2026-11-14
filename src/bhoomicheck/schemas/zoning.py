@@ -8,6 +8,7 @@ schemas/document.py and schemas/litigation.py, which do the same for the
 same reason.
 """
 
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -51,6 +52,11 @@ class KudaMasterPlanExtract(BaseModel):
         near_approved_layout: Whether the parcel is near an area the map
             marks as an "Approved Layout" -- a proxy for nearby
             development activity/demand.
+        plan_approved_on: The G.O. date the map itself carries ("Approved
+            vide G.O. Ms. No. 202 ... dated 17-11-2024"). Same idea as Bhu
+            Bharati's record vintage: a master plan approved years ago may
+            since have been revised, so the plan's own date belongs in the
+            finding's provenance rather than being discarded.
         notes: Anything else visible that doesn't fit a structured field.
     """
 
@@ -61,6 +67,7 @@ class KudaMasterPlanExtract(BaseModel):
     in_growth_corridor: bool | None = None
     near_major_road_upgrade: bool | None = None
     near_approved_layout: bool | None = None
+    plan_approved_on: date | None = None
     notes: str | None = None
 
 

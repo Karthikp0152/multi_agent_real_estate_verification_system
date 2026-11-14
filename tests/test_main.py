@@ -1,4 +1,4 @@
-"""Tests for the CLI's _resolve_pending helper.
+"""Tests for the CLI's pending-upload prompt loop.
 
 No live orchestrator/adapter/model calls: a stub orchestrator scripts
 provide_upload() responses, and monkeypatched input() supplies file
@@ -9,7 +9,7 @@ real agent/adapter does, which is covered elsewhere.
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from bhoomicheck.__main__ import _resolve_pending
+from bhoomicheck.__main__ import _work_through_pending
 from bhoomicheck.orchestrator.graph import PendingUpload
 from bhoomicheck.schemas.confidence import Confidence
 from bhoomicheck.schemas.finding import Finding
@@ -69,7 +69,7 @@ def test_resolves_a_single_pending_upload(monkeypatch, tmp_path) -> None:
     orchestrator = StubOrchestrator([final])
     pending = [PendingUpload(agent="zoning", instructions="fetch kuda", interrupt_id="id-1")]
 
-    result = _resolve_pending(orchestrator, "thread-1", pending)
+    result = _work_through_pending(orchestrator, "thread-1", pending)
 
     assert result is final
     assert orchestrator.calls == [("thread-1", "id-1", upload)]
@@ -85,7 +85,7 @@ def test_reprompts_when_file_does_not_exist(monkeypatch, tmp_path, capsys) -> No
     orchestrator = StubOrchestrator([final])
     pending = [PendingUpload(agent="zoning", instructions="fetch kuda", interrupt_id="id-1")]
 
-    result = _resolve_pending(orchestrator, "thread-1", pending)
+    result = _work_through_pending(orchestrator, "thread-1", pending)
 
     assert result is final
     assert orchestrator.calls == [("thread-1", "id-1", real_upload)]
@@ -107,10 +107,24 @@ def test_resolves_multiple_sequential_pending_uploads(monkeypatch, tmp_path) -> 
     orchestrator = StubOrchestrator([second_pending, final])
     pending = [PendingUpload(agent="zoning", instructions="fetch kuda", interrupt_id="id-1")]
 
-    result = _resolve_pending(orchestrator, "thread-1", pending)
+    result = _work_through_pending(orchestrator, "thread-1", pending)
 
     assert result is final
     assert orchestrator.calls == [
         ("thread-1", "id-1", upload_a),
         ("thread-1", "id-2", upload_b),
     ]
+
+
+def test_stopping_early_returns_none_and_prints_resume_hint(monkeypatch, capsys) -> None:
+    # Empty input means "stop here, I'll come back later" -- the whole
+    # point of persistence, so it must not be mistaken for a bad path.
+    monkeypatch.setattr("builtins.input", lambda _: "")
+    orchestrator = StubOrchestrator([])
+    pending = [PendingUpload(agent="zoning", instructions="fetch kuda", interrupt_id="id-1")]
+
+    result = _work_through_pending(orchestrator, "check-42", pending)
+
+    assert result is None
+    assert orchestrator.calls == []
+    assert "--resume check-42" in capsys.readouterr().out

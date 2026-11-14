@@ -59,12 +59,72 @@ class LandRecordsAgent:
             source_type="manual",
             document=upload_path.name,
             fetched_at=fetched_at,
+            # The portal states its own data vintage; carrying it through
+            # means a reader can tell a fresh record from a stale one,
+            # rather than only seeing when we happened to look.
+            record_updated_at=extract.records_updated_as_on,
         )
         return [
             self._ownership_finding(extract, provenance),
             self._land_type_finding(extract, provenance),
+            self._assigned_land_finding(extract, provenance),
             self._prohibited_status_finding(extract, provenance),
         ]
+
+    def _assigned_land_finding(
+        self, extract: LandRecordExtract, provenance: Provenance
+    ) -> Finding:
+        """Reads "Nature of Land", which is the assigned-land signal.
+
+        CLAUDE.md names "assigned/prohibited land" as one risk, but on
+        this portal they are two separate things and only one of them is
+        answerable here. "Nature of Land" distinguishes Patta (privately
+        held, freely transferable) from assigned or government land,
+        which carries transfer restrictions and is a genuine deal-killer.
+        The Section 22-A prohibited register is a different list and does
+        not appear on this page at all -- see _prohibited_status_finding.
+        """
+        nature = extract.nature_of_land
+        if nature is None:
+            return Finding(
+                check_id="land_records.assigned_land",
+                claim="whether this parcel is assigned or government land rather than patta",
+                status="not_verified",
+                provenance=provenance,
+                confidence=Confidence(level="low", reason=NOT_LEGIBLE_REASON),
+            )
+        looks_patta = "patta" in nature.casefold()
+        if looks_patta:
+            return Finding(
+                check_id="land_records.assigned_land",
+                claim=f'Bhu Bharati records the nature of this land as "{nature}"',
+                status="verified_ok",
+                provenance=provenance,
+                confidence=Confidence(
+                    level="medium",
+                    reason=(
+                        "patta land is privately held and transferable; this does not "
+                        "address the separate Section 22-A prohibited register"
+                    ),
+                ),
+            )
+        return Finding(
+            check_id="land_records.assigned_land",
+            claim=(
+                f'Bhu Bharati records the nature of this land as "{nature}", '
+                "which is not patta land"
+            ),
+            status="issue_found",
+            provenance=provenance,
+            confidence=Confidence(
+                level="medium",
+                reason=(
+                    "assigned and government lands carry transfer restrictions and "
+                    "often cannot be legally sold -- confirm with the Tahsildar "
+                    "before proceeding"
+                ),
+            ),
+        )
 
     def _ownership_finding(
         self, extract: LandRecordExtract, provenance: Provenance
@@ -106,10 +166,20 @@ class LandRecordsAgent:
                 provenance=provenance,
                 confidence=Confidence(level="low", reason=NOT_LEGIBLE_REASON),
             )
-        extent = f", extent {extract.extent}" if extract.extent else ""
+        details = ", ".join(
+            part
+            for part in (
+                f"extent {extract.extent}" if extract.extent else "",
+                f"classified {extract.classification_of_land}"
+                if extract.classification_of_land
+                else "",
+            )
+            if part
+        )
+        suffix = f" ({details})" if details else ""
         return Finding(
             check_id="land_records.land_type",
-            claim=f'parcel is recorded as "{extract.land_type}"{extent} per Bhu Bharati',
+            claim=f'parcel is recorded as "{extract.land_type}"{suffix} per Bhu Bharati',
             status="verified_ok",
             provenance=provenance,
             confidence=Confidence(level="medium", reason="as displayed by the portal"),
@@ -119,12 +189,24 @@ class LandRecordsAgent:
         self, extract: LandRecordExtract, provenance: Provenance
     ) -> Finding:
         if extract.prohibited_status is None:
+            # Not a bad screenshot -- Bhu Bharati's land-details result
+            # does not carry this at all (confirmed against a real page).
+            # Saying "not legible" would send someone back to retake a
+            # screenshot that was never going to contain the answer.
             return Finding(
                 check_id="land_records.prohibited_land",
                 claim="whether this parcel is flagged in the prohibited-lands (22-A) register",
                 status="not_verified",
                 provenance=provenance,
-                confidence=Confidence(level="low", reason=NOT_LEGIBLE_REASON),
+                confidence=Confidence(
+                    level="low",
+                    reason=(
+                        "Bhu Bharati's land-details page does not report Section 22-A "
+                        "prohibited status, so this check cannot be answered from this "
+                        "source -- it needs a separate prohibited-property search, and "
+                        "this gap applies to every parcel, not just this one"
+                    ),
+                ),
             )
         if extract.prohibited_status:
             return Finding(

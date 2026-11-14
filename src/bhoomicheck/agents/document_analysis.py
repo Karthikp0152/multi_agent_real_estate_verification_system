@@ -11,7 +11,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ValidationError
 
-from bhoomicheck.agents.provider import LLMProvider
+from bhoomicheck.llm.provider import LLMProvider
 from bhoomicheck.schemas.document import DocumentAnalysisReport, ExtractedDocument
 from bhoomicheck.schemas.finding import Finding
 from bhoomicheck.schemas.parcel import ParcelIdentifier

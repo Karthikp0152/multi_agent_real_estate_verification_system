@@ -73,6 +73,9 @@ class ZoningAgent:
             source_type="manual",
             document=upload_path.name,
             fetched_at=fetched_at,
+            # The map states the G.O. date it was approved under; a plan
+            # from years ago may since have been revised.
+            record_updated_at=extract.plan_approved_on,
         )
         return [
             self._zoning_classification_finding(extract, provenance),

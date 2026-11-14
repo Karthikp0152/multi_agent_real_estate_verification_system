@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 
 from bhoomicheck.agents.document_analysis import DocumentAnalysisAgent
-from bhoomicheck.orchestrator.graph import Orchestrator, PendingUpload
+from bhoomicheck.orchestrator.graph import Orchestrator, PendingUpload, sqlite_checkpointer
 from bhoomicheck.schemas.land_records import LandRecordExtract
 from bhoomicheck.schemas.litigation import LitigationSearchQuery, LitigationSearchResult
 from bhoomicheck.schemas.owner_background import OwnerBackgroundExtract, OwnerBackgroundQuery
@@ -223,3 +223,83 @@ def test_final_score_reflects_an_issue_from_one_specialist() -> None:
 
     assert isinstance(result, RiskReport)
     assert result.overall_score < 100
+
+
+class TestPersistence:
+    """A check must survive the process that started it.
+
+    These build a *second* Orchestrator against the same SQLite file,
+    with its own connection and freshly compiled graph -- the closest
+    in-process stand-in for closing the terminal and coming back
+    tomorrow, which is the actual workflow this project needs.
+    """
+
+    def _orchestrator(self, db_path: Path) -> Orchestrator:
+        return Orchestrator(
+            document_agent=DocumentAnalysisAgent(FakeProvider([VALID_DOCUMENT_PAYLOAD])),
+            kuda_adapter=FakeAdapter(KudaMasterPlanExtract(road_widening_affects_parcel=False)),
+            litigation_adapter=FakeAdapter(
+                LitigationSearchResult(searched_name="K. Rajaiah", cases=[])
+            ),
+            land_records_adapter=FakeAdapter(LandRecordExtract(prohibited_status=False)),
+            owner_background_adapter=FakeAdapter(OwnerBackgroundExtract(is_poa_sale=False)),
+            checkpointer=sqlite_checkpointer(db_path),
+        )
+
+    def _start(self, orchestrator: Orchestrator, check_id: str) -> list[PendingUpload]:
+        return orchestrator.start(
+            thread_id=check_id,
+            parcel=PARCEL,
+            pdf_paths=[Path("sale_deed_2015_1234.pdf")],
+            litigation_query=LITIGATION_QUERY,
+            owner_background_query=OWNER_BACKGROUND_QUERY,
+        )
+
+    def test_a_check_resumes_in_a_new_orchestrator(self, tmp_path: Path) -> None:
+        db = tmp_path / "checks.db"
+        first = self._orchestrator(db)
+        pending = self._start(first, "check-1")
+        zoning = next(p for p in pending if p.agent == "zoning")
+        first.provide_upload("check-1", zoning.interrupt_id, Path("kuda.png"))
+
+        # "Next day": brand new Orchestrator, new connection, same file.
+        second = self._orchestrator(db)
+        still_pending = second.pending_uploads("check-1")
+
+        # zoning was already supplied, so it must NOT be asked for again.
+        assert {p.agent for p in still_pending} == {
+            "litigation",
+            "land_records",
+            "owner_background",
+        }
+
+    def test_resumed_check_runs_to_a_final_report(self, tmp_path: Path) -> None:
+        db = tmp_path / "checks.db"
+        first = self._orchestrator(db)
+        pending = self._start(first, "check-2")
+        zoning = next(p for p in pending if p.agent == "zoning")
+        first.provide_upload("check-2", zoning.interrupt_id, Path("kuda.png"))
+
+        second = self._orchestrator(db)
+        result: list[PendingUpload] | RiskReport = second.pending_uploads("check-2")
+        for pending_upload in list(result):
+            result = second.provide_upload(
+                "check-2", pending_upload.interrupt_id, Path(f"{pending_upload.agent}.png")
+            )
+
+        assert isinstance(result, RiskReport)
+        assert {r.agent_name for r in result.specialist_reports} == {
+            "document_analysis",
+            "zoning",
+            "litigation",
+            "land_records",
+            "owner_background",
+            "growth_potential",
+        }
+        # And the finished report is retrievable by id alone afterwards.
+        assert second.final_report("check-2") is not None
+
+    def test_pending_uploads_is_empty_for_an_unknown_check(self, tmp_path: Path) -> None:
+        orchestrator = self._orchestrator(tmp_path / "checks.db")
+        assert orchestrator.pending_uploads("never-started") == []
+        assert orchestrator.final_report("never-started") is None

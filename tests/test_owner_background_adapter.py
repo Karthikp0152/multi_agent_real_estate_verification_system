@@ -9,8 +9,11 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import ScriptedProvider
+
 from bhoomicheck.adapters.owner_background import OwnerBackgroundAdapter
 from bhoomicheck.schemas.owner_background import OwnerBackgroundQuery
+from bhoomicheck.schemas.owner_background import OwnerBackgroundExtract
 
 
 def test_instructions_reference_the_seller_and_the_real_url() -> None:
@@ -27,8 +30,32 @@ def test_instructions_include_poa_document_number_when_known() -> None:
     assert "GPA/456/2020" in text
 
 
-def test_parse_refuses_without_a_real_sample(tmp_path: Path) -> None:
-    upload = tmp_path / "screenshot.png"
-    upload.write_bytes(b"\x89PNG fake")
-    with pytest.raises(NotImplementedError):
+def test_parse_requires_a_provider(upload) -> None:
+    # instructions() needs no model, so the provider is optional at
+    # construction -- but parse() must say plainly that it needs one
+    # rather than failing somewhere deeper.
+    with pytest.raises(RuntimeError, match="LLMProvider"):
         OwnerBackgroundAdapter().parse(upload)
+
+
+def test_parse_extracts_a_validated_record(upload) -> None:
+    provider = ScriptedProvider('{"is_poa_sale": true, "poa_registered": false}')
+    extract = OwnerBackgroundAdapter(provider).parse(upload)
+
+    assert isinstance(extract, OwnerBackgroundExtract)
+    assert extract.is_poa_sale is True
+    assert extract.poa_registered is False
+    # The uploaded file itself is what gets sent to the model.
+    assert provider.files == [[upload]]
+
+
+def test_parse_retries_with_the_validation_error(upload) -> None:
+    # First response violates the schema; the retry prompt must carry the
+    # specific error so the model can fix that field, not guess.
+    bad = '{"is_poa_sale": "maybe"}'  # "maybe" is not a boolean
+    provider = ScriptedProvider(bad, '{"is_poa_sale": true, "poa_registered": false}')
+    extract = OwnerBackgroundAdapter(provider).parse(upload)
+
+    assert isinstance(extract, OwnerBackgroundExtract)
+    assert len(provider.prompts) == 2
+    assert "failed validation" in provider.prompts[1]

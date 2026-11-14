@@ -206,3 +206,48 @@ rules:
       high: 10
       medium: 6
       low: 3
+
+  # Registered mortgages/charges found against the property. Serious --
+  # an undischarged mortgage is one of the named traps in the problem
+  # statement -- so weighted alongside prohibited land.
+  owner_background.encumbrances:
+    verified_ok: 0
+    not_verified:
+      high: 10
+      medium: 10
+      low: 10
+    issue_found:
+      high: 40
+      medium: 25
+      low: 12
+
+  # Permanently not_verified: an equitable mortgage leaves no registered
+  # trace, so no search can clear it. Deducted lightly and deliberately:
+  # it applies to every parcel equally, so a heavy weight would just
+  # shift every score down by a constant and tell a reader nothing. The
+  # value is the finding appearing in the report at all, not the points.
+  owner_background.equitable_mortgage:
+    verified_ok: 0
+    not_verified:
+      high: 3
+      medium: 3
+      low: 3
+    issue_found:
+      high: 25
+      medium: 15
+      low: 8
+
+  # "Nature of Land" on Bhu Bharati: patta vs assigned/government.
+  # Assigned land carries transfer restrictions and often cannot be
+  # legally sold at all, so an issue here is as serious as prohibited
+  # land. Weighted to match.
+  land_records.assigned_land:
+    verified_ok: 0
+    not_verified:
+      high: 10
+      medium: 10
+      low: 10
+    issue_found:
+      high: 45
+      medium: 30
+      low: 15

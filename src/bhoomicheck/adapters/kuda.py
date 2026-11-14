@@ -14,30 +14,66 @@ third-party error, not a KUDA one -- so source_name says so explicitly,
 and any agent consuming this should weight its confidence accordingly
 rather than treating it as an official record.
 
-STILL PROVISIONAL: the URLs and workflow above are now real (verified via
-a live fetch + search), but `KudaMasterPlanExtract`'s fields are still a
-best-effort guess at what's readable off a zoomed-in map screenshot --
-nobody has supplied a sample screenshot yet. `parse()` refuses to run
-until one exists, rather than guess at how to read it.
+STILL UNVALIDATED AGAINST A REAL SAMPLE: parse() is implemented -- a
+vision model reads the upload into the schema below, and anything it
+cannot read stays null, which becomes a "not_verified" finding rather
+than a guess. What is NOT yet confirmed is whether these field names
+match what the real page actually shows. Until someone runs this against
+a genuine screenshot, treat the field set as a best-effort guess that
+may need correcting, not as verified.
 """
 
 from pathlib import Path
 
 from bhoomicheck.adapters.base import ManualAdapter
+from bhoomicheck.llm.extraction import extract_structured
+from bhoomicheck.llm.provider import LLMProvider
 from bhoomicheck.schemas.parcel import ParcelIdentifier
 from bhoomicheck.schemas.zoning import KudaMasterPlanExtract
+
+_PARSE_CONTEXT = """\
+This is a screenshot of the KUDA Master Plan 2041 for Warangal, shown on
+1acre.in's interactive map overlay. The parcel of interest is the one the
+user centred/zoomed on.
+
+Read off, where legible:
+- the land-use zone the parcel sits in (the legend names zones like
+  Residential, Commercial, Mixed Use, Industrial, Agriculture, Public and
+  Semi-Public, Village Expansion, Growth Corridor 1/2)
+- whether a proposed road (Outer Ring Road, Arterial, Sub-Arterial,
+  Collector) passes THROUGH or along the parcel itself, which would force
+  a setback surrender -- this is distinct from a road merely being nearby
+- the width in metres of any such road, if labelled
+- whether the parcel falls inside a lake/water-body (FTL) buffer
+- whether the parcel is inside a Growth Corridor or Village Expansion Zone
+- whether a major road upgrade is NEAR the parcel without crossing it
+- whether an area marked "Approved Layout" is nearby
+
+- plan_approved_on: the map's own approval date, printed near the title
+  block as "Approved vide G.O. Ms. No. ... dated DD-MM-YYYY"
+
+If you cannot tell whether a road crosses the parcel versus merely passes
+nearby, leave both fields null rather than choosing one."""
 
 
 class KudaMasterPlanAdapter(ManualAdapter[ParcelIdentifier, KudaMasterPlanExtract]):
     """Manual-mode adapter: KUDA Master Plan 2041, via 1acre.in's overlay.
 
     PROVISIONAL -- see module docstring. The lookup workflow and URLs are
-    confirmed real; `parse()` still needs a real screenshot sample before
-    it can be implemented, so it fails loudly instead of guessing at how
-    to read a screenshot nobody has seen.
+    confirmed real. `parse()` reads the screenshot with a vision model;
+    its field names have not yet been validated against a real sample.
     """
 
     source_name = "1acre.in (third-party overlay of KUDA Master Plan 2041)"
+
+    def __init__(self, provider: LLMProvider | None = None) -> None:
+        """
+        Args:
+            provider: Model backend used to read the screenshot. Optional
+                so instructions() -- which needs no model at all -- works
+                without one; parse() raises if it was never supplied.
+        """
+        self.provider = provider
 
     def instructions(self, parcel: ParcelIdentifier) -> str:
         return (
@@ -62,9 +98,13 @@ class KudaMasterPlanAdapter(ManualAdapter[ParcelIdentifier, KudaMasterPlanExtrac
         )
 
     def parse(self, upload_path: Path) -> KudaMasterPlanExtract:
-        raise NotImplementedError(
-            "KudaMasterPlanAdapter.parse() has no real screenshot to learn "
-            "its shape from yet -- provide a sample 1acre.in map screenshot "
-            "before this can be implemented (fail loudly rather than guess "
-            "at parsing logic, per CLAUDE.md principle 6)."
+        if self.provider is None:
+            raise RuntimeError(
+                "KudaMasterPlanAdapter.parse() needs an LLMProvider; "
+                "construct it as KudaMasterPlanAdapter(provider)."
+            )
+        extract = extract_structured(
+            self.provider, upload_path, KudaMasterPlanExtract, _PARSE_CONTEXT
         )
+        assert isinstance(extract, KudaMasterPlanExtract)
+        return extract

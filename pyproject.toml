@@ -13,11 +13,16 @@ dependencies = [
     "python-dotenv",
     "pyyaml",
     "langgraph",
+    "langgraph-checkpoint-sqlite",
+    "fastapi",
+    "uvicorn[standard]",
+    "python-multipart",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
+    "httpx",
 ]
 
 [tool.hatch.build.targets.wheel]

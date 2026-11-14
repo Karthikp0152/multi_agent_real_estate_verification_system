@@ -32,6 +32,38 @@ class OwnerBackgroundQuery(BaseModel):
     poa_document_no: str | None = None
 
 
+class EncumbranceEntry(BaseModel):
+    """One mortgage or charge listed on an IGRS encumbrance search.
+
+    A crucial limitation belongs with this type rather than buried
+    elsewhere: an encumbrance certificate lists only *registered*
+    documents. An equitable mortgage -- created by depositing title
+    deeds with a lender, with no registered deed at all -- is legally
+    valid and completely invisible here. So an empty encumbrance list is
+    evidence of "nothing registered", never evidence of "no mortgage",
+    and the agent must never report it as the latter.
+
+    Attributes:
+        document_no: The registered document's number, as printed.
+        registered_on: Date of registration, if shown.
+        nature: What the entry is, in the portal's own words (e.g.
+            "mortgage", "sale deed", "gift") -- vocabulary varies, so
+            free text rather than a Literal.
+        parties: Names shown against the entry, copied verbatim.
+        amount: Any sum shown, as printed, including its currency marker.
+        discharged: Whether the listing shows this charge as discharged
+            or released. Null when the page does not say -- which is the
+            common case, and materially different from "not discharged".
+    """
+
+    document_no: str | None = None
+    registered_on: date | None = None
+    nature: str | None = None
+    parties: list[str] = []
+    amount: str | None = None
+    discharged: bool | None = None
+
+
 class OwnerBackgroundExtract(BaseModel):
     """Raw fields expected off an IGRS Telangana registered-document lookup.
 
@@ -59,6 +91,13 @@ class OwnerBackgroundExtract(BaseModel):
             chain for this property. A mismatch is a serious red flag
             (possible impersonation), separate from whether a POA is
             involved at all.
+        encumbrances_found: Registered mortgages/charges visible in the
+            encumbrance chain. True means at least one is listed, false
+            means the search ran and showed none, null means the
+            screenshot does not establish either way. See
+            EncumbranceEntry for why "none listed" is still not "no
+            mortgage".
+        encumbrances: One entry per mortgage/charge listed.
         notes: Anything else shown that doesn't fit a structured field.
     """
 
@@ -67,6 +106,8 @@ class OwnerBackgroundExtract(BaseModel):
     poa_execution_date: date | None = None
     poa_status: str | None = None
     seller_name_matches_title: bool | None = None
+    encumbrances_found: bool | None = None
+    encumbrances: list[EncumbranceEntry] = []
     notes: str | None = None
 
 
