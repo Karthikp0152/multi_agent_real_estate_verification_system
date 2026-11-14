@@ -53,14 +53,24 @@ class GeminiProvider:
     that could be committed.
     """
 
-    def __init__(self, model: str = "gemini-3.5-flash") -> None:
+    def __init__(
+        self,
+        model: str = "gemini-3.5-flash",
+        timeout_seconds: float = 600.0,
+    ) -> None:
         """
         Args:
             model: Gemini model name. Flash is the free-tier workhorse;
                 configurable so a quality comparison later is a one-line
                 change at the call site.
+            timeout_seconds: How long to wait for one response. Ten
+                minutes is deliberately generous: transcribing a
+                multi-page scanned register is slow and legitimately
+                takes minutes, so a tight timeout would fail real work.
+                The point is only that the wait is bounded.
         """
         self.model = model
+        self.timeout_seconds = timeout_seconds
         self.client = genai.Client()
 
     def generate(self, prompt: str, file_paths: list[Path]) -> str:
@@ -79,7 +89,18 @@ class GeminiProvider:
             # valid JSON in markdown fences, which would burn our validation
             # retries on formatting noise instead of real schema errors.
             config=types.GenerateContentConfig(
-                response_mime_type="application/json"
+                response_mime_type="application/json",
+                # A bounded wait, because without one there is none.
+                # Transcribing a long scanned register legitimately takes
+                # minutes -- a 15-page, 372-row list took several -- but a
+                # 2-page document once ran for twenty, and under the HTTP
+                # API an unbounded call holds a request open indefinitely
+                # with no way for the caller to tell a slow page from a
+                # hung one. Erroring is recoverable: the run is
+                # checkpointed, so the user simply uploads again.
+                http_options=types.HttpOptions(
+                    timeout=self.timeout_seconds * 1000  # SDK wants ms
+                ),
             ),
         )
         # .text is None if the model returned no usable candidates (e.g.
