@@ -44,10 +44,22 @@ from bhoomicheck.schemas.parcel import ParcelIdentifier
 from bhoomicheck.schemas.prohibited import ProhibitedListExtract
 
 _PARSE_CONTEXT = """\
-This is a Section 22-A prohibition list published by the Telangana
-Registration & Stamps Department, on the FORM-I proforma. It is a
-scanned document, often many pages, listing every prohibited property
-in one village.
+This is a Section 22-A prohibition record from the Telangana
+Registration & Stamps Department. It comes in one of three shapes, and
+which one you are looking at matters more than anything else here:
+
+A. A FORM-I scan -- a scanned, often multi-page table listing every
+   prohibited property in one village. Set availability "published".
+B. A live results table headed "Prohibited Properties (Court cases &
+   Others)". Set availability "published" if it lists properties, or
+   "empty" if it says "No property is found to be prohibited in this
+   village with given details". An empty register is a real answer, not
+   a failure -- do not report it as unreadable.
+C. A notice reading "Prohibition data is under review. it will be
+   published soon...". Set availability "under_review", leave entries
+   empty, and still fill sub_clause if the page says which register it
+   is. This means the department has not published that register at
+   all, which is reported very differently from a list nobody fetched.
 
 Transcribe EVERY data row you can see, across every page. Do not
 summarise, do not stop early, and do not skip rows that look like
@@ -68,13 +80,25 @@ Heading fields:
 - total_extent: the "TOTAL EXTENT:" figure in the footer, if present.
 
 Each row -> one entry:
-- survey_no: column "Sy. No. & Sub-Division No. (if any)". Copy EXACTLY
-  as printed, keeping slashes and letters: "49/53/B/1", "38/A/2",
-  "279A", "10/A/3". This is the only field used to decide whether a
-  parcel is prohibited, so transcription accuracy here matters more
-  than anywhere else in this system. If a row's survey number is
-  unreadable, still emit the row with survey_no null rather than
-  dropping it, and say so in notes -- a dropped row is an invisible gap.
+- survey_no: on a FORM-I scan this is the single column "Sy. No. &
+  Sub-Division No. (if any)" -- copy EXACTLY as printed, keeping
+  slashes and letters: "49/53/B/1", "38/A/2", "279A", "10/A/3".
+  On the "Court cases & Others" table the same information is SPLIT
+  across "Survey No." and "Sub Sy No.". Join them with a slash into
+  survey_no (survey "16" + sub "D" -> "16/D"), and also keep the
+  sub-division in sub_survey_no. If there is no sub-division, survey_no
+  is just the survey number.
+  This is the only field used to decide whether a parcel is prohibited,
+  so transcription accuracy here matters more than anywhere else in
+  this system. If a row's survey number is unreadable, still emit the
+  row with survey_no null rather than dropping it, and say so in notes
+  -- a dropped row is an invisible gap.
+- sub_survey_no, revenue_survey_no, plot_no: the "Sub Sy No.",
+  "Rev Sy No." / "Rev Sub Sy No." and "Plot No." columns, where the
+  source has them. Leave null on a FORM-I scan that does not.
+- reason: the "Reason" column on the court-cases table.
+- order_reference: the "Letter/Memo/Order/Notification No." column and
+  its date, joined as printed.
 - owner_name: column "Name of the Assignee / Allotee / Owner".
 - extent: column "Extent", exactly as printed (acres-guntas).
 - act: column "Act under which prohibited", e.g. "TG Assigned Lands
@@ -108,8 +132,18 @@ class ProhibitedPropertyAdapter(ManualAdapter[ParcelIdentifier, ProhibitedListEx
             "Non-Agriculture, with seven lists each: 22 A (1) (a), (b), "
             "(c)- Waqf, (c)- Endowment, (d), (e), and Court cases & "
             "Others.\n"
-            "4. Download ALL SEVEN from the column matching this parcel's "
-            "land type. Upload every one.\n"
+            "4. Open ALL SEVEN from the column matching this parcel's "
+            "land type, and capture whatever each one gives you.\n"
+            "   They do not all behave the same way, and all three "
+            "outcomes are worth capturing:\n"
+            "     - a PDF list: download it;\n"
+            '     - a results table (usually "Court cases & Others"): '
+            "screenshot it, including when it says no property is "
+            "prohibited -- an empty register is a real answer;\n"
+            '     - a notice saying "Prohibition data is under review": '
+            "screenshot that too. It records that the department has "
+            "not published that register, which is reported as the "
+            "department's gap rather than yours.\n"
             "   Seven, not one: these are separate registers, and a survey "
             "number absent from three of them has not been cleared. "
             "Whatever you leave out is reported as unchecked, not as "

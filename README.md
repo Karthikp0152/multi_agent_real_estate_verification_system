@@ -34,7 +34,7 @@ Six specialist agents, an orchestrator, and a risk/report agent:
 | Litigation | eCourts (district + high court) | possible name matches |
 | Owner Background | IGRS | POA sale, seller identity, **encumbrances** |
 | Growth Potential | KUDA master plan | growth corridor, nearby upgrades |
-| Prohibited Property | IGRS 22-A register | **Section 22-A prohibition** (assigned/Waqf/endowment/court-attached land) |
+| Prohibited Property | IGRS 22-A register | **Section 22-A prohibition** across seven sub-clause registers (assigned / Waqf / endowment / court-attached) |
 | Document Analysis | uploaded PDFs | deed chain, parties, extent mismatches |
 
 The orchestrator is a LangGraph state machine. The four portal-backed
@@ -114,7 +114,10 @@ was digitised in the right place.
    silently treated as "no problem found". A parcel outside the mapped
    area does not get reported as comfortably clear of roads, and a
    survey number absent from three of the seven 22-A lists is reported
-   as partly checked, not as cleared.
+   as partly checked, not as cleared. Where the department has not
+   published a register at all, the report says so and names the
+   department as the blocker, rather than implying the buyer was
+   careless or that the register was consulted.
 
 ## Guardrails
 

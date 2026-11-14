@@ -183,3 +183,146 @@ class TestAdapter:
         upload.write_bytes(b"%PDF-1.4 fake")
         with pytest.raises(RuntimeError, match="needs an LLMProvider"):
             ProhibitedPropertyAdapter().parse(upload)
+
+
+# --- registers that are not all alike -----------------------------------
+#
+# Confirmed against the live portal (Warangal, Nov 2026): the seven
+# sub-clause registers behave in three different ways, and conflating
+# them misreports whose gap is outstanding.
+
+
+def under_review(sub_clause: str) -> ProhibitedListExtract:
+    """What Waqf and Endowment actually return for Warangal."""
+    return ProhibitedListExtract(
+        sub_clause=sub_clause, availability="under_review", entries=[]
+    )
+
+
+def empty_register(sub_clause: str = "Court cases & Others") -> ProhibitedListExtract:
+    """The live court-cases table reporting nothing for this village."""
+    return ProhibitedListExtract(
+        sub_clause=sub_clause, availability="empty", entries=[]
+    )
+
+
+class TestUnpublishedRegisters:
+    def test_an_unreviewed_register_is_not_counted_as_checked(self) -> None:
+        result = match_against_lists(PARCEL, [under_review("22 A (1) (c)- Waqf")])
+        assert result.sub_clauses_checked == []
+        assert result.sub_clauses_unpublished == ["22 A (1) (c)- Waqf"]
+
+    def test_an_empty_register_is_a_real_answer(self) -> None:
+        """"No property is found to be prohibited" is information.
+
+        Treating it as a failure would nag the user to re-fetch a page
+        that already answered the question.
+        """
+        result = match_against_lists(PARCEL, [empty_register()])
+        assert result.sub_clauses_checked == ["Court cases & Others"]
+        assert result.sub_clauses_unpublished == []
+
+    def test_a_real_answer_beats_an_unavailable_one(self) -> None:
+        """If one upload reads a register another reported as pending,
+        the register was readable after all."""
+        result = match_against_lists(
+            PARCEL, [under_review("22 A (1) (a)"), real_list("22 A (1) (a)")]
+        )
+        assert result.sub_clauses_checked == ["22 A (1) (a)"]
+        assert result.sub_clauses_unpublished == []
+
+    def test_unpublished_registers_are_not_demanded_from_the_user(self) -> None:
+        """They cannot be fetched, so they are not listed as missing."""
+        extracts = [real_list(c) for c in SUB_CLAUSES if "Waqf" not in c]
+        extracts.append(under_review("22 A (1) (c)- Waqf"))
+        result = match_against_lists(PARCEL, extracts)
+        assert result.missing_sub_clauses == []
+        assert result.fully_covered is True
+
+    def test_an_unpublished_register_still_blocks_a_clean_verdict(self) -> None:
+        """The parcel cannot be cleared against a register that does not
+        publicly exist, however diligent the buyer was."""
+        extracts = [real_list(c) for c in SUB_CLAUSES if "Waqf" not in c]
+        extracts.append(under_review("22 A (1) (c)- Waqf"))
+        report = ProhibitedPropertyAgent().report(
+            PARCEL, [(Path(f"{i}.pdf"), e) for i, e in enumerate(extracts)]
+        )
+        finding = next(f for f in report.findings if f.check_id == CHECK_ID)
+        assert finding.status == "not_verified"
+        # Medium, not low: six of seven registers really were searched.
+        assert finding.confidence.level == "medium"
+        assert "under review" in finding.confidence.reason
+        assert "Waqf" in finding.confidence.reason
+
+    def test_the_blocker_is_named_as_the_department_not_the_user(self) -> None:
+        extracts = [real_list(c) for c in SUB_CLAUSES if "Waqf" not in c]
+        extracts.append(under_review("22 A (1) (c)- Waqf"))
+        report = ProhibitedPropertyAgent().report(
+            PARCEL, [(Path(f"{i}.pdf"), e) for i, e in enumerate(extracts)]
+        )
+        reason = report.findings[0].confidence.reason
+        assert "until the department publishes" in reason
+
+
+class TestCourtCasesTable:
+    def test_a_split_survey_number_still_matches(self) -> None:
+        """The court-cases table splits "16/D" across two columns.
+
+        The adapter rejoins them, so matching sees one field whatever
+        the source's layout was.
+        """
+        table = ProhibitedListExtract(
+            sub_clause="Court cases & Others",
+            availability="published",
+            entries=[
+                ProhibitedListEntry(
+                    survey_no="16/D",
+                    sub_survey_no="D",
+                    reason="Court attachment",
+                    order_reference="Memo No. 123 dated 01-01-2020",
+                )
+            ],
+        )
+        result = match_against_lists(PARCEL, [table])
+        assert len(result.matches) == 1
+        assert result.matches[0].reason == "Court attachment"
+
+
+class TestChennaramAsItStandsToday:
+    """The real state of survey 16/D's 22-A check, Nov 2026.
+
+    (a) published and searched, 372 rows, no match.
+    Court cases & Others: published, empty for this village.
+    Waqf and Endowment: "prohibition data is under review".
+    (b), (d), (e): not yet fetched.
+    """
+
+    def _report(self):
+        extracts = [
+            (Path("22a_a.pdf"), real_list("22 A (1) (a)")),
+            (Path("court.png"), empty_register()),
+            (Path("waqf.png"), under_review("22 A (1) (c)- Waqf")),
+            (Path("endow.png"), under_review("22 A (1) (c)- Endowment")),
+        ]
+        return ProhibitedPropertyAgent().report(PARCEL, extracts)
+
+    def test_two_registers_searched_two_unpublished_three_outstanding(self) -> None:
+        result = self._report().result
+        assert result.sub_clauses_checked == ["22 A (1) (a)", "Court cases & Others"]
+        assert result.sub_clauses_unpublished == [
+            "22 A (1) (c)- Waqf",
+            "22 A (1) (c)- Endowment",
+        ]
+        assert result.missing_sub_clauses == [
+            "22 A (1) (b)",
+            "22 A (1) (d)",
+            "22 A (1) (e)",
+        ]
+
+    def test_the_verdict_is_still_outstanding_on_the_user(self) -> None:
+        """Three registers remain fetchable, so the user's gap dominates."""
+        finding = next(
+            f for f in self._report().findings if f.check_id == CHECK_ID
+        )
+        assert finding.status == "not_verified"
+        assert "only partly checked" in finding.claim

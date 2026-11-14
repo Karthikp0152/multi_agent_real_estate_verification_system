@@ -62,19 +62,31 @@ def match_against_lists(
     matches = []
     rows = 0
     covered: list[str] = []
+    unpublished: list[str] = []
     for extract in extracts:
         rows += len(extract.entries)
         # A list whose heading could not be read covers nothing: we
         # cannot credit it against a sub-clause we cannot name, and
         # guessing which one it was would overstate the coverage.
-        if extract.sub_clause in SUB_CLAUSES and extract.sub_clause not in covered:
-            covered.append(extract.sub_clause)
+        if extract.sub_clause in SUB_CLAUSES:
+            if extract.availability == "under_review":
+                # The department has not published this register. It was
+                # attempted and is unobtainable -- recorded separately so
+                # the report can say whose gap it is.
+                if extract.sub_clause not in unpublished:
+                    unpublished.append(extract.sub_clause)
+            elif extract.sub_clause not in covered:
+                covered.append(extract.sub_clause)
         for entry in extract.entries:
             if entry.survey_no and related(parcel.survey_no, entry.survey_no):
                 matches.append(entry)
+    # A register that is both read somewhere and under review elsewhere
+    # counts as read: a real answer beats an unavailable one.
+    unpublished = [c for c in unpublished if c not in covered]
     return ProhibitedMatchResult(
         matches=matches,
         sub_clauses_checked=covered,
+        sub_clauses_unpublished=unpublished,
         rows_examined=rows,
     )
 
@@ -118,6 +130,11 @@ class ProhibitedPropertyAgent:
             f"{len(result.sub_clauses_checked)} of {len(SUB_CLAUSES)} "
             "sub-clause lists"
         )
+        if result.sub_clauses_unpublished:
+            scope += (
+                f", {len(result.sub_clauses_unpublished)} not published by "
+                "the department"
+            )
 
         if result.matches:
             rows = "; ".join(
@@ -166,6 +183,35 @@ class ProhibitedPropertyAgent:
                     reason=(
                         "absent from some lists is not absent from the "
                         f"register -- still unchecked: {missing}"
+                    ),
+                ),
+            )
+
+        if result.sub_clauses_unpublished:
+            # Every obtainable register was read, and the parcel is in
+            # none of them -- but some registers do not exist publicly
+            # yet, so the parcel cannot honestly be called cleared.
+            # Nothing the buyer does closes this; only the department
+            # publishing can. Stated as such rather than as a chore.
+            pending = ", ".join(result.sub_clauses_unpublished)
+            return Finding(
+                check_id=CHECK_ID,
+                claim=(
+                    f"survey no. {parcel.survey_no} does not appear in any "
+                    f"published Section 22-A list for {parcel.village} "
+                    f"({scope}), but the department has not yet published "
+                    f"every register"
+                ),
+                status="not_verified",
+                provenance=provenance,
+                confidence=Confidence(
+                    level="medium",
+                    reason=(
+                        "every register that is published was checked and the "
+                        f"parcel is in none of them; {pending} "
+                        'still reports "prohibition data is under review", so '
+                        "no search can clear the parcel against it until the "
+                        f"department publishes -- {SOURCE_CAVEAT}"
                     ),
                 ),
             )
