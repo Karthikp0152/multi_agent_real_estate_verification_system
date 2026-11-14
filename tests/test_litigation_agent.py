@@ -17,18 +17,66 @@ PARCEL = ParcelIdentifier(
 )
 
 
-def test_no_cases_found_produces_verified_ok_with_caveat() -> None:
-    result = LitigationSearchResult(searched_name="K. Rajaiah", cases=[])
+def test_no_cases_found_is_not_verified_not_a_clean_bill() -> None:
+    """An empty eCourts search clears almost nothing.
+
+    Confirmed against the live Warangal portal: the party-name search
+    makes **Year** a required field and runs against one court complex
+    at a time. So "no cases found" is a statement about one year in one
+    court, not about a person. This previously reported `verified_ok`,
+    which was the most dangerous sentence this system could have
+    printed -- a buyer reading "no litigation found" would not guess it
+    meant "in 2025, in this one complex".
+    """
+    result = LitigationSearchResult(
+        searched_name="K. Rajaiah",
+        year_searched=2025,
+        court_complex="Warangal, PDJ Court Complex",
+        status_filter="both",
+        cases=[],
+    )
     report = LitigationAgent().report(PARCEL, [(Path("k_rajaiah.png"), result)])
 
     assert report.agent_name == "litigation"
     assert len(report.findings) == 1
     finding = report.findings[0]
-    assert finding.status == "verified_ok"
+    assert finding.status == "not_verified"
     assert finding.provenance is not None
     assert finding.provenance.document == "k_rajaiah.png"
-    # Absence of a match must stay honestly caveated, not read as a clean bill.
+    # The claim must carry the scope, not just the absence.
+    assert "filing year 2025" in finding.claim
+    assert "Warangal, PDJ Court Complex" in finding.claim
+    assert "one filing year and one court complex" in finding.confidence.reason
+    # And the name-based weakness still stands alongside the scope one.
     assert "misspellings" in finding.confidence.reason
+
+
+def test_a_search_with_no_recorded_year_says_so_loudly() -> None:
+    """The portal cannot be searched without a year.
+
+    So a result lacking one means the year went unrecorded somewhere in
+    our own pipeline, and the claim must not imply broader coverage than
+    a single unknown year.
+    """
+    result = LitigationSearchResult(searched_name="K. Rajaiah", cases=[])
+    finding = LitigationAgent().report(PARCEL, [(Path("x.png"), result)]).findings[0]
+    assert "unrecorded filing year" in finding.claim
+
+
+def test_a_pending_only_search_does_not_imply_disposed_cases_were_checked() -> None:
+    """The results table has no status column.
+
+    A row's status is whatever radio produced it, so reading a
+    Pending-only search as "all cases" would silently drop every
+    disposed matter.
+    """
+    result = LitigationSearchResult(
+        searched_name="K. Rajaiah", year_searched=2024,
+        court_complex="Warangal, PDJ Court Complex",
+        status_filter="pending", cases=[],
+    )
+    finding = LitigationAgent().report(PARCEL, [(Path("x.png"), result)]).findings[0]
+    assert "pending cases only" in finding.claim
 
 
 def test_cases_found_produce_issue_found_with_low_confidence() -> None:

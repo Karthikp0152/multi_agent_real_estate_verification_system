@@ -21,6 +21,34 @@ from bhoomicheck.schemas.provenance import Provenance
 SOURCE_NAME = "eCourts (Warangal District Court + Telangana High Court, party-name search)"
 
 
+def _scope_of(result: LitigationSearchResult) -> str:
+    """Describe exactly what one search covered.
+
+    Every claim this agent makes is scoped by it, because the portal's
+    own form decides the scope: a required Year field and a required
+    Court Complex mean one search is never a statement about a person,
+    only about a person in one year in one court.
+    """
+    parts = []
+    if result.court_complex:
+        parts.append(f"in {result.court_complex}")
+    else:
+        parts.append("in the court complex searched")
+    if result.year_searched is not None:
+        parts.append(f"for filing year {result.year_searched}")
+    else:
+        # Loud rather than silent: without a year we cannot say what was
+        # covered, and the portal cannot have been searched without one.
+        parts.append("for an unrecorded filing year")
+    if result.status_filter == "pending":
+        parts.append("among pending cases only")
+    elif result.status_filter == "disposed":
+        parts.append("among disposed cases only")
+    elif result.status_filter == "both":
+        parts.append("among both pending and disposed cases")
+    return " ".join(parts)
+
+
 class LitigationAgent:
     """Builds a validated LitigationReport from one or more eCourts searches."""
 
@@ -61,22 +89,33 @@ class LitigationAgent:
             fetched_at=fetched_at,
         )
 
+        scope = _scope_of(result)
+
         if not result.cases:
+            # NOT a blanket "no litigation". The eCourts party-name search
+            # requires a filing year and a court complex, and searches one
+            # of each at a time -- confirmed against the live Warangal
+            # portal, where Year is a required field. So an empty result
+            # is evidence about that year and that complex only, and
+            # saying otherwise would be the most dangerous sentence this
+            # system could print.
             return Finding(
                 check_id="litigation.name_match",
                 claim=(
                     f'no cases naming "{result.searched_name}" as a party '
-                    "were found in Warangal District Court or Telangana "
-                    "High Court eCourts search"
+                    f"were found {scope}"
                 ),
-                status="verified_ok",
+                status="not_verified",
                 provenance=provenance,
                 confidence=Confidence(
-                    level="medium",
+                    level="low",
                     reason=(
-                        "name-based search only -- misspellings, untried "
-                        "name variants, or filing under a different name "
-                        "would not surface here"
+                        "the eCourts party-name search covers one filing "
+                        "year and one court complex per search, so this "
+                        "clears neither other years nor other courts; and "
+                        "being name-based, misspellings, untried variants "
+                        "or a filing under a different name would not "
+                        "surface here either"
                     ),
                 ),
             )
@@ -90,7 +129,7 @@ class LitigationAgent:
             check_id="litigation.name_match",
             claim=(
                 f'{len(result.cases)} case(s) naming "{result.searched_name}" '
-                f"as a party were found: {case_summary}"
+                f"as a party were found {scope}: {case_summary}"
             ),
             status="issue_found",
             provenance=provenance,
