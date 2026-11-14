@@ -236,6 +236,37 @@ def _section_html(report: BaseAgentReport) -> str:
     return f"<h2>{heading}</h2>\n{table}{cards}"
 
 
+def _deduction_split_html(report: RiskReport) -> str:
+    """Separate points lost to problems from points lost to missing records.
+
+    These are different things and a single number hides it. Some checks
+    cannot be cleared from public records at all -- an equitable mortgage
+    leaves no registered trace, the eCourts party search covers one year
+    at a time, and two of the seven Section 22-A registers are not
+    published. A parcel with nothing wrong with it therefore cannot score
+    100, and a reader seeing the result has no way to tell "this land has
+    problems" from "the public record is incomplete" unless we say so.
+    """
+    problems = sum(
+        s.points_deducted for s in report.scored_findings if s.status == "issue_found"
+    )
+    gaps = sum(
+        s.points_deducted for s in report.scored_findings if s.status == "not_verified"
+    )
+    if not problems and not gaps:
+        return ""
+    parts = []
+    if problems:
+        parts.append(f"<b>&minus;{problems}</b> from problems found")
+    if gaps:
+        parts.append(
+            f"<b>&minus;{gaps}</b> from checks that could not be completed "
+            "&mdash; not evidence of a problem, and some of these cannot be "
+            "cleared from public records at all"
+        )
+    return f'    <div class="score-note">{" &middot; ".join(parts)}</div>\n'
+
+
 def _conflicts_html(report: RiskReport) -> str:
     """A banner when two sources answered one question differently.
 
@@ -294,6 +325,7 @@ def render_html(report: RiskReport) -> str:
     <div class="score-value">{report.overall_score}</div>
     <div class="score-note">out of 100 &mdash; starts at 100, with points deducted per finding
       by the rules in <code>scoring/rules.yaml</code></div>
+{_deduction_split_html(report)}
   </div>
   <div class="summary">
     <span class="pill issue">{counts["issue_found"]} issue(s) found</span>

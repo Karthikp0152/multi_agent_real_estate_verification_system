@@ -273,3 +273,30 @@ def test_the_summary_counts_what_was_scored_not_every_finding() -> None:
     )
     assert "1 issue(s) found" in html
     assert "1 verified OK" in html
+
+
+def test_the_score_separates_problems_from_incomplete_records() -> None:
+    """A single number hides the difference that matters most.
+
+    Several checks cannot be cleared from public records at all, so a
+    parcel with nothing wrong with it still cannot score 100. Without
+    this split a reader cannot tell "this land has problems" from "the
+    record is incomplete".
+    """
+    html = render_html(
+        report_with(
+            [
+                make_scored("issue_found", "zoning.road_widening_setback"),
+                make_scored("not_verified", "land_records.prohibited_land"),
+            ],
+            [],
+        )
+    )
+    assert "from problems found" in html
+    assert "could not be completed" in html
+    assert "not evidence of a problem" in html
+
+
+def test_a_report_with_no_deductions_shows_no_split() -> None:
+    html = render_html(report_with([make_scored("verified_ok")], []))
+    assert "from problems found" not in html
