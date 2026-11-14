@@ -110,3 +110,42 @@ def test_multiple_name_variants_each_produce_their_own_finding() -> None:
 
     assert len(report.findings) == 2
     assert len(report.searches) == 2
+
+
+def test_results_without_a_recorded_search_term_are_not_attributed() -> None:
+    """Seen for real, from a Case Type search screenshot.
+
+    The results table was populated but the name box was empty, and the
+    agent rendered `cases naming "" as a party were found` -- a finding
+    that reads like a name match while identifying nobody. Rows that
+    cannot be attributed are not evidence about this seller.
+    """
+    result = LitigationSearchResult(
+        searched_name="",
+        year_searched=2025,
+        court_complex="Warangal, PDJ Court Complex",
+        status_filter="pending",
+        cases=[
+            LitigationCaseExtract(
+                court="District Courts, Warangal",
+                case_no="SC.NDPS/34/2025",
+                status="pending",
+                matched_party_name="SHO PS WARDHANNAPET Versus SAMSAN DALABEHARA",
+            )
+        ],
+    )
+    finding = LitigationAgent().report(PARCEL, [(Path("x.png"), result)]).findings[0]
+
+    assert finding.status == "not_verified"
+    assert 'naming ""' not in finding.claim
+    assert "cannot be attributed" in finding.claim
+    assert "Party Name tab" in finding.confidence.reason
+    # The scope is still reported -- it is real information.
+    assert "filing year 2025" in finding.claim
+
+
+def test_a_whitespace_only_search_term_is_treated_the_same() -> None:
+    result = LitigationSearchResult(searched_name="   ", cases=[])
+    finding = LitigationAgent().report(PARCEL, [(Path("x.png"), result)]).findings[0]
+    assert finding.status == "not_verified"
+    assert "cannot be attributed" in finding.claim

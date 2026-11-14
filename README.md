@@ -31,7 +31,7 @@ Six specialist agents, an orchestrator, and a risk/report agent:
 |---|---|---|
 | Land Records | Bhu Bharati | pattadar, extent, land type, **assigned land** |
 | Zoning | KUDA master plan + road geometry | **road setback**, zone class, FTL buffer |
-| Litigation | eCourts (district + high court) | possible name matches |
+| Litigation | eCourts (district + high court) | possible name matches, scoped to the year and court searched |
 | Owner Background | IGRS | POA sale, seller identity, **encumbrances** |
 | Growth Potential | KUDA master plan | growth corridor, nearby upgrades |
 | Prohibited Property | IGRS 22-A register | **Section 22-A prohibition** across seven sub-clause registers (assigned / Waqf / endowment / court-attached) |
@@ -142,7 +142,8 @@ are different claims.
 | Geometry engine | **Validated.** Hand-checkable synthetic fixture (point and boundary modes); real-world result reproduced from source data |
 | Bhu Bharati extraction | **Validated** against a real result page (13/15 fields, both nulls correct). Produced three schema corrections |
 | 22-A prohibition check | **Validated end to end** against the real Chennaram FORM-I list: all 372 rows transcribed from 15 page scans, totals matching the form's own footer. Survey-number matching has 25 tests of its own |
-| KUDA, eCourts, IGRS encumbrance extraction | **Not validated.** `parse()` is implemented and field labels are best-effort; those adapters say so in their docstrings |
+| eCourts litigation | **Validated** against the live Warangal portal. The form's required **Year** field means one search covers one year in one court complex, so an empty result is reported as `not_verified`, scoped, never as "no litigation" |
+| KUDA, IGRS encumbrance extraction | **Not validated.** `parse()` is implemented and field labels are best-effort; those adapters say so in their docstrings |
 | Orchestration, scoring, reporting | 200 tests, including two-process SQLite resume |
 
 Unreadable fields become `null`, which becomes a `not_verified` finding

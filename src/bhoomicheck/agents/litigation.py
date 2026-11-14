@@ -91,6 +91,33 @@ class LitigationAgent:
 
         scope = _scope_of(result)
 
+        if not result.searched_name.strip():
+            # Without a name, these rows cannot be attributed to anyone.
+            # Seen for real: a screenshot of a Case Type search has a
+            # populated results table and an empty name box, and the
+            # agent rendered 'cases naming "" as a party' -- a finding
+            # that reads like a name match while identifying nobody.
+            # Whatever the rows are, they are not evidence about this
+            # seller until someone says which name was searched.
+            return Finding(
+                check_id="litigation.name_match",
+                claim=(
+                    f"{len(result.cases)} case(s) were listed {scope}, but "
+                    "the search term was not recorded, so they cannot be "
+                    "attributed to the seller"
+                ),
+                status="not_verified",
+                provenance=provenance,
+                confidence=Confidence(
+                    level="low",
+                    reason=(
+                        "the uploaded result does not show which name was "
+                        "searched -- re-run the search from the Party Name "
+                        "tab and capture the form along with the results"
+                    ),
+                ),
+            )
+
         if not result.cases:
             # NOT a blanket "no litigation". The eCourts party-name search
             # requires a filing year and a court complex, and searches one
