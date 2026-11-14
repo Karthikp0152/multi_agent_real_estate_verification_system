@@ -3,3 +3,8 @@ __pycache__/
 .pytest_cache/
 .env
 *.db
+
+# Source master-plan exports. The repo ships the geometry *code* and a
+# synthetic fixture; real plan data stays local (see geo/road_network.py).
+*.kml
+*.kmz

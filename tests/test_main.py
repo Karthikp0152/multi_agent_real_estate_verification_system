@@ -15,7 +15,7 @@ from bhoomicheck.schemas.confidence import Confidence
 from bhoomicheck.schemas.finding import Finding
 from bhoomicheck.schemas.parcel import ParcelIdentifier
 from bhoomicheck.schemas.provenance import Provenance
-from bhoomicheck.schemas.report import BaseAgentReport
+from bhoomicheck.schemas.zoning import KudaMasterPlanExtract, ZoningReport
 from bhoomicheck.schemas.risk_report import RiskReport
 
 PARCEL = ParcelIdentifier(
@@ -33,10 +33,10 @@ def make_risk_report() -> RiskReport:
         ),
         confidence=Confidence(level="high", reason="test"),
     )
-    specialist = BaseAgentReport(
-        agent_name="zoning",
+    specialist = ZoningReport(
         parcel=PARCEL,
         generated_at=datetime.now(timezone.utc),
+        extracts=[KudaMasterPlanExtract()],
         findings=[finding],
     )
     return RiskReport(

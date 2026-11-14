@@ -19,7 +19,7 @@ from bhoomicheck.schemas.finding import Finding
 from bhoomicheck.schemas.litigation import LitigationSearchResult
 from bhoomicheck.schemas.parcel import ParcelIdentifier
 from bhoomicheck.schemas.provenance import Provenance
-from bhoomicheck.schemas.report import BaseAgentReport
+from bhoomicheck.schemas.zoning import KudaMasterPlanExtract, ZoningReport
 from bhoomicheck.schemas.risk_report import DISCLAIMER, RiskReport
 from bhoomicheck.schemas.zoning import KudaMasterPlanExtract
 
@@ -31,7 +31,7 @@ OTHER_PARCEL = ParcelIdentifier(
 )
 
 
-def make_generic_report(parcel: ParcelIdentifier, agent_name: str = "zoning") -> BaseAgentReport:
+def make_generic_report(parcel: ParcelIdentifier) -> ZoningReport:
     finding = Finding(
         check_id="test.check",
         claim="test claim",
@@ -41,10 +41,10 @@ def make_generic_report(parcel: ParcelIdentifier, agent_name: str = "zoning") ->
         ),
         confidence=Confidence(level="high", reason="test"),
     )
-    return BaseAgentReport(
-        agent_name=agent_name,
+    return ZoningReport(
         parcel=parcel,
         generated_at=datetime.now(timezone.utc),
+        extracts=[KudaMasterPlanExtract()],
         findings=[finding],
     )
 
@@ -140,3 +140,98 @@ class TestRiskReportAgent:
         zoning_report = ZoningAgent().report(PARCEL, [(Path("kuda.png"), extract)])
         final = RiskReportAgent().assemble(PARCEL, [zoning_report])
         assert final.overall_score == 100
+
+
+class TestSpecialistReportTypesSurviveSerialization:
+    """Regression tests for a bug that silently truncated reports.
+
+    specialist_reports was annotated list[BaseAgentReport]. Pydantic
+    validates and serializes by the annotated type, so a ZoningReport
+    round-tripping through a checkpoint came back as a BaseAgentReport
+    with every subclass field dropped and no error raised. The HTTP API
+    checkpoints to SQLite, so it lost the measured road table from every
+    report it produced, while in-memory tests passed because nothing was
+    ever deserialized.
+
+    The fix is a discriminated union keyed on agent_name. These tests
+    exist so it cannot regress quietly.
+    """
+
+    def _risk_report(self, specialist) -> RiskReport:
+        return RiskReport(
+            parcel=PARCEL,
+            generated_at=datetime.now(timezone.utc),
+            overall_score=70,
+            scored_findings=[],
+            specialist_reports=[specialist],
+        )
+
+    def test_a_zoning_report_round_trips_with_its_own_fields(self) -> None:
+        from bhoomicheck.schemas.geo import LatLon, RoadNetworkAssessment, RoadProximity
+
+        assessment = RoadNetworkAssessment(
+            location=LatLon(lat=17.856513, lon=79.630249, source="gis_readout"),
+            network_label="test network",
+            within_mapped_area=True,
+            roads=[
+                RoadProximity(
+                    road_label="30 M",
+                    proposed_width_m=30,
+                    distance_m=207.7,
+                    segment_count=394,
+                )
+            ],
+        )
+        original = make_generic_report(PARCEL)
+        original.road_assessment = assessment
+
+        revived = RiskReport.model_validate_json(
+            self._risk_report(original).model_dump_json()
+        )
+        zoning = revived.specialist_reports[0]
+
+        assert isinstance(zoning, ZoningReport)
+        assert zoning.road_assessment is not None
+        assert zoning.road_assessment.roads[0].road_label == "30 M"
+        # The computed fields come back consistent, not as stored junk.
+        assert zoning.road_assessment.roads[0].clearance_m == 192.7
+        assert isinstance(zoning.road_assessment.location, LatLon)
+
+    def test_extracts_also_survive(self) -> None:
+        """Not just the new field -- this truncation predated the geometry."""
+        revived = RiskReport.model_validate_json(
+            self._risk_report(make_generic_report(PARCEL)).model_dump_json()
+        )
+        assert len(revived.specialist_reports[0].extracts) == 1
+
+    def test_a_bare_base_report_is_rejected_rather_than_truncated(self) -> None:
+        """Failing loudly is the point (architecture principle 6).
+
+        A report that is not one of the six known specialist types is a
+        programming error. Previously it was accepted and quietly
+        stripped; now it cannot get in at all.
+        """
+        from pydantic import ValidationError
+
+        from bhoomicheck.schemas.report import BaseAgentReport
+
+        bare = BaseAgentReport(
+            agent_name="zoning",
+            parcel=PARCEL,
+            generated_at=datetime.now(timezone.utc),
+            findings=make_generic_report(PARCEL).findings,
+        )
+        with pytest.raises(ValidationError):
+            self._risk_report(bare)
+
+    def test_an_unknown_agent_name_is_rejected(self) -> None:
+        with pytest.raises(Exception):
+            RiskReport.model_validate(
+                {
+                    "parcel": PARCEL.model_dump(),
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "overall_score": 70,
+                    "scored_findings": [],
+                    "specialist_reports": [{"agent_name": "made_up_agent"}],
+                }
+            )

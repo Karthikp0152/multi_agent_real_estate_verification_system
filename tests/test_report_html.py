@@ -13,8 +13,9 @@ from bhoomicheck.schemas.confidence import Confidence
 from bhoomicheck.schemas.finding import Finding
 from bhoomicheck.schemas.parcel import ParcelIdentifier
 from bhoomicheck.schemas.provenance import Provenance
-from bhoomicheck.schemas.report import BaseAgentReport
+from bhoomicheck.schemas.geo import LatLon, RoadNetworkAssessment, RoadProximity
 from bhoomicheck.schemas.risk_report import DISCLAIMER, RiskReport
+from bhoomicheck.schemas.zoning import KudaMasterPlanExtract, ZoningReport
 
 PARCEL = ParcelIdentifier(
     survey_no="123/A", village="Hasanparthy", mandal="Hasanparthy", district="Warangal"
@@ -38,11 +39,18 @@ def make_finding(**overrides) -> Finding:
     return Finding(**fields)
 
 
-def make_report(findings: list[Finding] | None = None) -> RiskReport:
-    specialist = BaseAgentReport(
-        agent_name="zoning",
+def make_report(
+    findings: list[Finding] | None = None,
+    assessment: "RoadNetworkAssessment | None" = None,
+) -> RiskReport:
+    # A real ZoningReport, not a bare BaseAgentReport: RiskReport's
+    # specialist_reports is a discriminated union, so the base class is no
+    # longer a valid member -- and was never a shape production produced.
+    specialist = ZoningReport(
         parcel=PARCEL,
         generated_at=datetime.now(timezone.utc),
+        extracts=[KudaMasterPlanExtract()],
+        road_assessment=assessment,
         findings=findings or [make_finding()],
     )
     return RiskReport(
@@ -142,3 +150,66 @@ def test_record_vintage_is_shown_separately_from_fetch_date() -> None:
 def test_record_vintage_is_omitted_when_the_source_does_not_state_it() -> None:
     html = render_html(make_report())  # provenance has no record_updated_at
     assert "last updated" not in html
+
+
+# --- the measured road-proximity table ----------------------------------
+
+def make_assessment(*, within: bool = True, encroach: bool = False) -> RoadNetworkAssessment:
+    roads = [
+        RoadProximity(
+            road_label="60 M",
+            proposed_width_m=60,
+            distance_m=12.0 if encroach else 940.0,
+            segment_count=102,
+        ),
+        RoadProximity(
+            road_label="30 M", proposed_width_m=30, distance_m=207.7, segment_count=394
+        ),
+    ]
+    roads.sort(key=lambda r: r.distance_m)
+    return RoadNetworkAssessment(
+        location=LatLon(lat=17.856513, lon=79.630249, source="gis_readout"),
+        network_label="KUDA Master Plan 2041 - proposed road network",
+        within_mapped_area=within,
+        roads=roads,
+    )
+
+
+def test_every_road_class_is_shown_not_just_the_deciding_one() -> None:
+    html = render_html(make_report(assessment=make_assessment()))
+    assert "60 M" in html
+    assert "30 M" in html
+    assert "207.7" in html
+
+
+def test_a_clear_road_shows_its_margin() -> None:
+    html = render_html(make_report(assessment=make_assessment()))
+    # 30 M centreline 207.7 m away, corridor 15 m: clear by 192.7.
+    assert "clear by 192.7 m" in html
+
+
+def test_an_encroaching_road_is_marked_and_quantified() -> None:
+    html = render_html(make_report(assessment=make_assessment(encroach=True)))
+    # 60 M centreline 12 m away, corridor reaches 30 m: 18 m of overlap.
+    assert "encroaches 18.0 m" in html
+    assert 'class="hit"' in html
+
+
+def test_the_table_states_where_it_measured_from() -> None:
+    """Provenance, principle 3: the coordinate is part of the claim."""
+    html = render_html(make_report(assessment=make_assessment()))
+    assert "17.856513" in html
+    assert "79.630249" in html
+    assert "gis readout" in html
+    assert "KUDA Master Plan 2041" in html
+
+
+def test_an_out_of_area_table_warns_instead_of_reassuring() -> None:
+    """Distances from outside the plan area must not read as clearance."""
+    html = render_html(make_report(assessment=make_assessment(within=False)))
+    assert "outside the area this network covers" in html
+
+
+def test_no_table_is_rendered_without_an_assessment() -> None:
+    html = render_html(make_report(assessment=None))
+    assert 'class="roads"' not in html
