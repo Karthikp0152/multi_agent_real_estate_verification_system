@@ -103,6 +103,9 @@ _STYLES = """
   .meta b { color: #444; font-weight: 600; }
   footer { margin: 44px 0 0; padding-top: 14px; border-top: 1px solid var(--line);
            font-size: .8rem; color: var(--muted); }
+  .conflict { margin: 0 0 20px; padding: 12px 14px; border-radius: 4px;
+              background: #fff4f4; border: 1px solid #e4b4b4; font-size: .9rem; }
+  .conflict ul { margin: 6px 0 0; padding-left: 20px; }
   .geo { margin: 10px 0 26px; }
   .geo caption { caption-side: top; text-align: left; font-size: .82rem;
                  color: var(--muted); padding: 0 0 8px; }
@@ -233,14 +236,35 @@ def _section_html(report: BaseAgentReport) -> str:
     return f"<h2>{heading}</h2>\n{table}{cards}"
 
 
+def _conflicts_html(report: RiskReport) -> str:
+    """A banner when two sources answered one question differently.
+
+    Placed above the score, because a disagreement between sources
+    undermines the number rather than sitting beside it. Scoring keeps
+    the worse of the two answers, but a reader must know the question is
+    genuinely open, not settled.
+    """
+    if not report.conflicting_checks:
+        return ""
+    items = "".join(f"<li><code>{escape(c)}</code></li>" for c in report.conflicting_checks)
+    return (
+        '<div class="conflict"><b>Sources disagree.</b> Two sources gave '
+        "different answers to the same question. The more serious answer was "
+        "used for scoring, but these checks should be treated as unresolved "
+        f"until confirmed by a person:<ul>{items}</ul></div>"
+    )
+
+
 def render_html(report: RiskReport) -> str:
     """Render the full report as one standalone HTML document."""
     parcel = report.parcel
+    # Counted from what was actually scored, not from every specialist
+    # finding. Where two sources answered one question only one counts,
+    # so counting raw findings would show a total the score contradicts.
     counts = {"issue_found": 0, "not_verified": 0, "verified_ok": 0}
-    for specialist in report.specialist_reports:
-        for finding in specialist.findings:
-            if finding.status in counts:
-                counts[finding.status] += 1
+    for scored in report.scored_findings:
+        if scored.status in counts:
+            counts[scored.status] += 1
 
     sections = "\n".join(_section_html(r) for r in report.specialist_reports)
     title = f"Due diligence: survey no. {parcel.survey_no}, {parcel.village}"
@@ -264,6 +288,7 @@ def render_html(report: RiskReport) -> str:
   </p>
 
   <div class="disclaimer">{escape(report.disclaimer)}</div>
+{_conflicts_html(report)}
 
   <div class="score">
     <div class="score-value">{report.overall_score}</div>

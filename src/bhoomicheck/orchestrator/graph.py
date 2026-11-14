@@ -308,9 +308,10 @@ class Orchestrator:
 
     def _zoning_node(self, state: OrchestratorState) -> dict:
         instructions = self.kuda_adapter.instructions(state["parcel"])
-        upload_path = Path(interrupt({"agent": "zoning", "instructions": instructions}))
-        extract = self.kuda_adapter.parse(upload_path)
-        extracts = [(upload_path, extract)]
+        paths = self._resume_paths(
+            interrupt({"agent": "zoning", "instructions": instructions})
+        )
+        extracts = [(path, self.kuda_adapter.parse(path)) for path in paths]
         # Geometry is used only when both halves are present: a network
         # to measure against, and a coordinate to measure from. Missing
         # either is not an error -- the agent falls back to the
@@ -328,25 +329,50 @@ class Orchestrator:
         )
         return {"zoning_report": report, "zoning_extracts": extracts}
 
+    @staticmethod
+    def _resume_paths(resumed: object) -> list[Path]:
+        """Normalise an interrupt's resume value into a list of file paths.
+
+        One lookup can legitimately produce several screenshots, and
+        every specialist agent already accepts a list of (path, extract)
+        pairs. Only this layer was single-file, which meant the system
+        asked for something it could not accept: the IGRS instructions
+        name four separate dashboard services, and the litigation ones
+        ask for a screenshot per name variant tried.
+
+        A bare string is still accepted so older checkpoints -- resumed
+        from a SQLite file written before this change -- keep working
+        rather than failing on a shape they predate.
+        """
+        if isinstance(resumed, (list, tuple)):
+            return [Path(item) for item in resumed]
+        return [Path(resumed)]  # type: ignore[arg-type]
+
     def _litigation_node(self, state: OrchestratorState) -> dict:
         instructions = self.litigation_adapter.instructions(state["litigation_query"])
-        upload_path = Path(interrupt({"agent": "litigation", "instructions": instructions}))
-        result = self.litigation_adapter.parse(upload_path)
-        report = self.litigation_agent.report(state["parcel"], [(upload_path, result)])
+        paths = self._resume_paths(
+            interrupt({"agent": "litigation", "instructions": instructions})
+        )
+        results = [(path, self.litigation_adapter.parse(path)) for path in paths]
+        report = self.litigation_agent.report(state["parcel"], results)
         return {"litigation_report": report}
 
     def _land_records_node(self, state: OrchestratorState) -> dict:
         instructions = self.land_records_adapter.instructions(state["parcel"])
-        upload_path = Path(interrupt({"agent": "land_records", "instructions": instructions}))
-        extract = self.land_records_adapter.parse(upload_path)
-        report = self.land_records_agent.report(state["parcel"], [(upload_path, extract)])
+        paths = self._resume_paths(
+            interrupt({"agent": "land_records", "instructions": instructions})
+        )
+        extracts = [(path, self.land_records_adapter.parse(path)) for path in paths]
+        report = self.land_records_agent.report(state["parcel"], extracts)
         return {"land_records_report": report}
 
     def _owner_background_node(self, state: OrchestratorState) -> dict:
         instructions = self.owner_background_adapter.instructions(state["owner_background_query"])
-        upload_path = Path(interrupt({"agent": "owner_background", "instructions": instructions}))
-        extract = self.owner_background_adapter.parse(upload_path)
-        report = self.owner_background_agent.report(state["parcel"], [(upload_path, extract)])
+        paths = self._resume_paths(
+            interrupt({"agent": "owner_background", "instructions": instructions})
+        )
+        extracts = [(path, self.owner_background_adapter.parse(path)) for path in paths]
+        report = self.owner_background_agent.report(state["parcel"], extracts)
         return {"owner_background_report": report}
 
     def _growth_potential_node(self, state: OrchestratorState) -> dict:
@@ -430,9 +456,31 @@ class Orchestrator:
         self, thread_id: str, interrupt_id: str, upload_path: Path
     ) -> list[PendingUpload] | RiskReport:
         """Resolve one pending upload and continue. Same return shape as start()."""
+        return self.provide_uploads(thread_id, interrupt_id, [upload_path])
+
+    def provide_uploads(
+        self, thread_id: str, interrupt_id: str, upload_paths: list[Path]
+    ) -> list[PendingUpload] | RiskReport:
+        """Resolve a pending lookup with one or more files.
+
+        Several files per lookup is the normal case, not an edge case:
+        the IGRS instructions send a user to four separate dashboard
+        services, and the litigation ones ask for a screenshot per name
+        variant tried. Each file is parsed separately and all of them
+        reach the agent, which already takes a list.
+
+        Raises:
+            ValueError: if no files are supplied. Resolving a lookup
+                with nothing would mark it answered while producing no
+                evidence -- a silent gap of exactly the kind
+                architecture principle 6 forbids.
+        """
+        if not upload_paths:
+            raise ValueError("a lookup needs at least one file to resolve it")
         config = {"configurable": {"thread_id": thread_id}}
         result = self._graph.invoke(
-            Command(resume={interrupt_id: str(upload_path)}), config=config
+            Command(resume={interrupt_id: [str(path) for path in upload_paths]}),
+            config=config,
         )
         return self._pending_or_final(result)
 

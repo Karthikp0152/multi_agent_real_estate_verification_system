@@ -56,19 +56,37 @@ from bhoomicheck.schemas.risk_report import RiskReport
 DEFAULT_DB = Path.home() / ".bhoomicheck" / "checks.db"
 
 
-def _prompt_for_upload(pending: PendingUpload) -> Path | None:
-    """Show one lookup's instructions and take a file path. None = stop for now."""
+def _prompt_for_upload(pending: PendingUpload) -> list[Path] | None:
+    """Show one lookup's instructions and collect its files. None = stop for now.
+
+    Several files per lookup, because one lookup routinely spans several
+    pages: the IGRS instructions send the user to four separate
+    dashboard services behind one login, and the litigation ones ask for
+    a screenshot per name variant tried.
+    """
     print(f"\n=== {pending.agent} needs a manual lookup ===")
     print(pending.instructions)
-    print("\n(press Enter with no path to stop here and resume later)")
+    print("\n(enter one file path per line; blank line when done)")
+    print("(blank line with nothing collected yet stops here and resumes later)")
+
+    paths: list[Path] = []
     while True:
-        path_str = input(f"\nPath to the uploaded file for {pending.agent}: ").strip()
+        prompt = (
+            f"\nPath to a file for {pending.agent}: "
+            if not paths
+            else f"\nAnother file for {pending.agent} (blank to finish, {len(paths)} so far): "
+        )
+        path_str = input(prompt).strip()
         if not path_str:
-            return None
+            # Blank before anything was collected means "stop"; blank
+            # after means "that's all of them". Distinguishing the two
+            # is what lets a user both pause and finish with one key.
+            return paths or None
         upload_path = Path(path_str).expanduser()
         if upload_path.is_file():
-            return upload_path
-        print(f'"{path_str}" is not a file -- try again.')
+            paths.append(upload_path)
+        else:
+            print(f'"{path_str}" is not a file -- try again.')
 
 
 def _work_through_pending(
@@ -77,11 +95,13 @@ def _work_through_pending(
     """Walk the outstanding lookups. Returns None if the user stopped early."""
     result: list[PendingUpload] | RiskReport = pending
     while isinstance(result, list) and result:
-        upload_path = _prompt_for_upload(result[0])
-        if upload_path is None:
+        upload_paths = _prompt_for_upload(result[0])
+        if upload_paths is None:
             print(f"\nStopped. Resume with:  python -m bhoomicheck --resume {check_id}")
             return None
-        result = orchestrator.provide_upload(check_id, result[0].interrupt_id, upload_path)
+        result = orchestrator.provide_uploads(
+            check_id, result[0].interrupt_id, upload_paths
+        )
     return result if isinstance(result, RiskReport) else None
 
 

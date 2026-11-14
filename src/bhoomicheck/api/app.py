@@ -180,16 +180,34 @@ def create_app(
         return CheckStatus(check_id=check_id, complete=True, pending=[])
 
     @app.post("/api/checks/{check_id}/uploads/{interrupt_id}", response_model=CheckStatus)
-    def provide_upload(check_id: str, interrupt_id: str, file: UploadFile) -> CheckStatus:
-        """Supply one portal screenshot and let the pipeline continue."""
+    def provide_upload(
+        check_id: str,
+        interrupt_id: str,
+        file: UploadFile | None = None,
+        files: list[UploadFile] | None = None,
+    ) -> CheckStatus:
+        """Supply one or more portal screenshots and let the pipeline continue.
+
+        Both `file` and `files` are accepted. One lookup often spans
+        several pages -- the IGRS dashboard has four relevant services
+        behind one login -- so `files` is the general form; `file` is
+        kept because it is the obvious name for the common single-page
+        case and was the original parameter.
+        """
         if not any(p.interrupt_id == interrupt_id for p in orchestrator.pending_uploads(check_id)):
             raise HTTPException(
                 status_code=404,
                 detail="that lookup is not pending -- it may already have been supplied",
             )
-        saved = save_upload(file, check_dir_for(uploads_root, check_id))
+        uploads = [*(files or []), *([file] if file is not None else [])]
+        if not uploads:
+            raise HTTPException(
+                status_code=400, detail="at least one file is required"
+            )
+        check_dir = check_dir_for(uploads_root, check_id)
+        saved = [save_upload(upload, check_dir) for upload in uploads]
         try:
-            outcome = orchestrator.provide_upload(check_id, interrupt_id, saved)
+            outcome = orchestrator.provide_uploads(check_id, interrupt_id, saved)
         except ValidationError as e:
             # The model could not read this file into the schema even
             # after retries. The run stays checkpointed, so the caller

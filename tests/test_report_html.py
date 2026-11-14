@@ -213,3 +213,63 @@ def test_an_out_of_area_table_warns_instead_of_reassuring() -> None:
 def test_no_table_is_rendered_without_an_assessment() -> None:
     html = render_html(make_report(assessment=None))
     assert 'class="roads"' not in html
+
+
+# --- multi-source disagreement ------------------------------------------
+
+from bhoomicheck.schemas.scoring import ScoredFinding  # noqa: E402
+
+
+def make_scored(status: str = "issue_found", check_id: str = "land_records.prohibited_land"):
+    return ScoredFinding(
+        check_id=check_id,
+        status=status,
+        confidence_level="high",
+        points_deducted=40,
+        rule_matched=check_id,
+    )
+
+
+def report_with(scored: list, conflicts: list[str]) -> RiskReport:
+    zoning = ZoningReport(
+        parcel=PARCEL,
+        generated_at=datetime.now(timezone.utc),
+        extracts=[KudaMasterPlanExtract()],
+        findings=[make_finding()],
+    )
+    return RiskReport(
+        parcel=PARCEL,
+        generated_at=datetime.now(timezone.utc),
+        overall_score=60,
+        scored_findings=scored,
+        conflicting_checks=conflicts,
+        specialist_reports=[zoning],
+    )
+
+
+def test_a_source_disagreement_is_shown_prominently() -> None:
+    """Above the score, because it undermines the number."""
+    html = render_html(report_with([make_scored()], ["land_records.prohibited_land"]))
+    assert "Sources disagree" in html
+    assert "land_records.prohibited_land" in html
+    # Compare against the rendered div, not "score-value" alone -- that
+    # string also appears in the stylesheet, far above the body.
+    assert html.index("Sources disagree") < html.index('<div class="score-value">')
+
+
+def test_no_banner_when_sources_agree() -> None:
+    html = render_html(report_with([make_scored()], []))
+    assert "Sources disagree" not in html
+
+
+def test_the_summary_counts_what_was_scored_not_every_finding() -> None:
+    """Where two sources answer one question, only one counts.
+
+    Counting raw specialist findings would print a total the score
+    contradicts -- "2 issues found" beside a score docked only once.
+    """
+    html = render_html(
+        report_with([make_scored("issue_found"), make_scored("verified_ok", "zoning.ftl_buffer")], [])
+    )
+    assert "1 issue(s) found" in html
+    assert "1 verified OK" in html

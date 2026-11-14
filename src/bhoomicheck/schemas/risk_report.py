@@ -13,6 +13,7 @@ from typing import Annotated, Self, Union
 from pydantic import BaseModel, Field, computed_field, model_validator
 
 from bhoomicheck.schemas.document import DocumentAnalysisReport
+from bhoomicheck.schemas.finding import Finding
 from bhoomicheck.schemas.growth_potential import GrowthPotentialReport
 from bhoomicheck.schemas.land_records import LandRecordsReport
 from bhoomicheck.schemas.litigation import LitigationReport
@@ -70,6 +71,15 @@ class RiskReport(BaseModel):
             every specialist report.
         scored_findings: Every finding that fed the score, with which
             rule fired for each -- the audit trail behind overall_score.
+        superseded_findings: Findings for a check another source
+            answered better. Kept, not discarded: a reader is entitled to
+            know a second source was consulted and what it said. These
+            are NOT scored -- scoring one question twice was a real
+            defect this field's existence records the fix for.
+        conflicting_checks: check_ids where two sources both answered and
+            answered differently. Not the ordinary case of one source
+            being unable to answer -- a genuine disagreement, which is a
+            reason to trust neither until a human looks.
         specialist_reports: Every specialist report this was built from.
             Typed as the shared base contract (architecture principle 1)
             so this schema needs no change when a new specialist agent
@@ -80,6 +90,8 @@ class RiskReport(BaseModel):
     generated_at: datetime
     overall_score: int = Field(ge=0, le=100)
     scored_findings: list[ScoredFinding]
+    superseded_findings: list[Finding] = []
+    conflicting_checks: list[str] = []
     specialist_reports: list[SpecialistReport] = Field(min_length=1)
 
     @computed_field  # type: ignore[prop-decorator]
