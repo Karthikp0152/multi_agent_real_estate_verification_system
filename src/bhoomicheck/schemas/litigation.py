@@ -22,6 +22,15 @@ class LitigationSearchQuery(BaseModel):
     Attributes:
         full_name: The name to search, as it appears on the land record
             being checked (e.g. a sale deed's executant).
+        court_complex: Which court complex to search, e.g. "Warangal,
+            PDJ Court Complex". The portal requires one and will not
+            search across all of them, so a search is only ever evidence
+            about the complex it was run in.
+        years: Which filing years to search. The portal requires a year
+            and searches exactly one at a time, so screening a person
+            properly means repeating the search per year. Empty means
+            nobody has decided a range yet, which the agent reports as
+            a gap rather than guessing one.
         also_known_as: Spelling variants/short forms worth trying too --
             eCourts matches partial names (3+ characters), and
             transliterated Indian names vary a lot across documents.
@@ -29,6 +38,8 @@ class LitigationSearchQuery(BaseModel):
 
     full_name: str
     also_known_as: list[str] = []
+    court_complex: str | None = None
+    years: list[int] = []
 
 
 class LitigationCaseExtract(BaseModel):
@@ -74,6 +85,15 @@ class LitigationSearchResult(BaseModel):
     Attributes:
         searched_name: The name actually typed into the search box (one
             of query.full_name / query.also_known_as).
+        year_searched: The filing year this search covered. The portal
+            requires a year and searches one at a time, so a result
+            without one cannot say how much was covered.
+        court_complex: The complex this search ran in.
+        status_filter: Which of the Pending / Disposed / Both radio
+            buttons was used. Recorded because the portal does NOT put
+            a status column on the results table -- a row's status is
+            whatever filter produced it, so searching "Pending" and
+            reading the rows as "all cases" would badly understate.
         cases: Every case the search returned. Empty is a valid, useful
             result (no matches found) -- it is not the same as
             "not_verified"; the agent decides which finding status that
@@ -81,6 +101,9 @@ class LitigationSearchResult(BaseModel):
     """
 
     searched_name: str
+    year_searched: int | None = None
+    court_complex: str | None = None
+    status_filter: Literal["pending", "disposed", "both"] | None = None
     cases: list[LitigationCaseExtract] = []
 
 
