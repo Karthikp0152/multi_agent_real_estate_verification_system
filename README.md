@@ -35,7 +35,7 @@ Six specialist agents, an orchestrator, and a risk/report agent:
 | Owner Background | IGRS | POA sale, seller identity, **encumbrances** |
 | Growth Potential | KUDA master plan | growth corridor, nearby upgrades |
 | Prohibited Property | IGRS 22-A register | **Section 22-A prohibition** across seven sub-clause registers (assigned / Waqf / endowment / court-attached) |
-| Document Analysis | uploaded PDFs | deed chain, parties, extent mismatches |
+| Document Analysis | uploaded PDFs | deed chain, parties, extent, **survey-number cross-check** |
 
 The orchestrator is a LangGraph state machine. The four portal-backed
 agents pause on a real `interrupt()`, tell the user exactly what to fetch

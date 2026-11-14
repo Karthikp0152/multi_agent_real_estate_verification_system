@@ -251,3 +251,34 @@ rules:
       high: 45
       medium: 30
       low: 15
+
+  # A deed describing land that is not this parcel. Serious, but
+  # deliberately below the 40-45 tier: resurveys and renumbering
+  # genuinely change a parcel's survey number over time, so a mismatch
+  # is a chain to trace rather than proof of fraud. The finding says so
+  # too -- see agents/document_analysis.py.
+  document.survey_number_mismatch:
+    verified_ok: 0
+    not_verified:
+      high: 5
+      medium: 5
+      low: 5
+    issue_found:
+      high: 30
+      medium: 20
+      low: 10
+
+  # An unapproved/unsanctioned layout. Weighted alongside the setback
+  # risk: building permission on a plot in an unapproved venture is
+  # refused outright, which is the same practical outcome as losing the
+  # land to a road -- the buyer owns something they cannot build on.
+  document.layout_unapproved:
+    verified_ok: 0
+    not_verified:
+      high: 10
+      medium: 10
+      low: 10
+    issue_found:
+      high: 40
+      medium: 25
+      low: 12

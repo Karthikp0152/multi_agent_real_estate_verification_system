@@ -23,6 +23,28 @@ DocType = Literal[
 ]
 
 
+class Boundaries(BaseModel):
+    """The chatur seema: a deed's four-boundary description of a plot.
+
+    Indian deeds traditionally describe an extent by naming the adjoining
+    plots/owners on each side, alongside or instead of survey measurements.
+
+    Attributes:
+        north: Description of what lies to the north, verbatim from the
+            deed. Optional, like the other three sides: scans are often
+            only partially legible, and a missing side must stay missing
+            rather than be guessed.
+        south: See north.
+        east: See north.
+        west: See north.
+    """
+
+    north: str | None = None
+    south: str | None = None
+    east: str | None = None
+    west: str | None = None
+
+
 class ExtractedDocument(BaseModel):
     """What the agent read out of a single uploaded document.
 
@@ -37,6 +59,22 @@ class ExtractedDocument(BaseModel):
             because not every document type carries one.
         execution_date: Date the document was executed/issued. Optional
             for the same reason.
+        survey_number: Survey number as written in this document, which
+            may differ from the parcel's current survey_no (resurveys and
+            subdivisions mean an older deed can cite a superseded number).
+            Optional: not every document states it legibly.
+        extent_raw: The extent exactly as printed in the document, e.g.
+            "0 Ac 12 Guntas". Kept verbatim as the audit trail behind
+            extent_sq_yards. Optional: not every document type states an
+            extent at all.
+        extent_sq_yards: extent_raw normalised to square yards for
+            cross-document comparison. Optional because it is derived from
+            extent_raw -- when that text is missing or its units cannot be
+            parsed with confidence, there is nothing reliable to normalise,
+            and a required float would pressure a fabricated guess instead.
+        boundaries: The chatur seema, when the document states one.
+            Optional because non-deed documents (EC, passbook) typically
+            don't carry it.
         executants: Party names on the transferring side of a deed.
             Empty for non-deed documents (EC, passbook).
         claimants: Party names on the receiving side of a deed.
@@ -50,6 +88,10 @@ class ExtractedDocument(BaseModel):
     doc_type_detail: str | None = None
     reference_no: str | None = None
     execution_date: date | None = None
+    survey_number: str | None = None
+    extent_raw: str | None = None
+    extent_sq_yards: float | None = None
+    boundaries: Boundaries | None = None
     executants: list[str] = []
     claimants: list[str] = []
     extraction_confidence: Confidence
